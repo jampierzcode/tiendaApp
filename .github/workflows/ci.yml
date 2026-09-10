@@ -1,0 +1,34 @@
+name: CI
+
+# Reproduce lo que hace el servidor de despliegue: clonar limpio, instalar
+# desde cero y compilar. El hook de pre-push no puede detectar fallos de
+# instalación porque en tu equipo las dependencias ya están bajadas.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  compilar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # npm 12 dejó de ejecutar los scripts de instalación por defecto. Se
+      # instala aquí a propósito para que CI falle igual que el despliegue si
+      # falta aprobar alguno en el campo `allowScripts` del package.json.
+      - name: npm al día
+        run: npm i -g npm@latest
+
+      - name: Instalar en limpio
+        run: npm ci
+
+      - name: Comprobar tipos
+        run: npm run typecheck
+
+      - name: Compilar
+        run: node ace build
