@@ -7,6 +7,9 @@ export default class ProductAttributeValue extends BaseModel {
   declare id: number
 
   @column()
+  declare businessId: number
+
+  @column()
   declare attributeId: number
 
   @column()

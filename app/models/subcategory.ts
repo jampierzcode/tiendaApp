@@ -8,6 +8,9 @@ export default class Subcategory extends BaseModel {
   declare id: number
 
   @column()
+  declare businessId: number
+
+  @column()
   declare categoryId: number
 
   @column()

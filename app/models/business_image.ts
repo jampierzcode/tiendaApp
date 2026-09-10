@@ -13,6 +13,16 @@ export default class BusinessImage extends BaseModel {
   @column()
   declare url: string
 
+  /** Clave del objeto en el bucket. Null si la URL es externa. */
+  @column()
+  declare storageKey: string | null
+
+  @column()
+  declare sizeBytes: number | null
+
+  @column()
+  declare contentType: string | null
+
   @column()
   declare name: string | null
 

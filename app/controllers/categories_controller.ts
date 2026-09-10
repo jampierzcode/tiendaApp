@@ -1,76 +1,73 @@
 import Category from '#models/category'
-import Business from '#models/business'
+import SlugService from '#services/slug_service'
 import type { HttpContext } from '@adonisjs/core/http'
 
-import slugifyLib from 'slugify'
-const slugify = slugifyLib.default || slugifyLib
-
 export default class CategoriesController {
-  public async index({ auth }: HttpContext) {
-    const user = auth.user!
-    const business = await Business.findByOrFail('user_id', user.id)
+  public async index({ business }: HttpContext) {
     const categories = await Category.query()
       .where('business_id', business.id)
       .preload('subcategories')
+      .orderBy('name', 'asc')
+
     return { status: 'success', data: categories }
   }
 
-  public async getByBusiness({ params }: HttpContext) {
-    const categories = await Category.query()
-      .where('business_id', params.businessId)
-      .preload('subcategories')
-      .orderBy('id', 'desc')
-    return { status: 'success', data: categories }
-  }
-
-  public async show({ params, auth }: HttpContext) {
-    const user = auth.user!
-    const business = await Business.findByOrFail('user_id', user.id)
+  public async show({ params, business }: HttpContext) {
     const category = await Category.query()
       .where('id', params.id)
       .andWhere('business_id', business.id)
       .preload('subcategories')
       .firstOrFail()
+
     return { status: 'success', data: category }
   }
 
-  public async store({ request, auth }: HttpContext) {
-    const user = auth.user!
-    const business = await Business.findByOrFail('user_id', user.id)
+  public async store({ request, business }: HttpContext) {
     const data = request.only(['name', 'image_url', 'description'])
-    const slug = slugify(data.name)
+    const slug = await SlugService.uniqueFor('categories', business.id, data.name)
 
     const category = await Category.create({
       businessId: business.id,
-      ...data,
+      name: data.name,
       slug,
+      imageUrl: data.image_url ?? null,
+      description: data.description ?? null,
     })
-    return { status: 'success', message: 'Category created', data: category }
+
+    return { status: 'success', message: 'Categoría creada', data: category }
   }
 
-  public async update({ params, request, auth }: HttpContext) {
-    const user = auth.user!
-    const business = await Business.findByOrFail('user_id', user.id)
+  public async update({ params, request, business }: HttpContext) {
     const category = await Category.query()
       .where('id', params.id)
       .andWhere('business_id', business.id)
       .firstOrFail()
 
-    category.merge(request.only(['name', 'image_url', 'description']))
+    const data = request.only(['name', 'image_url', 'description'])
+
+    if (data.name && data.name !== category.name) {
+      category.slug = await SlugService.uniqueFor('categories', business.id, data.name, category.id)
+    }
+
+    category.merge({
+      name: data.name ?? category.name,
+      imageUrl: data.image_url ?? category.imageUrl,
+      description: data.description ?? category.description,
+    })
+
     await category.save()
 
-    return { status: 'success', message: 'Category updated', data: category }
+    return { status: 'success', message: 'Categoría actualizada', data: category }
   }
 
-  public async destroy({ params, auth }: HttpContext) {
-    const user = auth.user!
-    const business = await Business.findByOrFail('user_id', user.id)
+  public async destroy({ params, business }: HttpContext) {
     const category = await Category.query()
       .where('id', params.id)
       .andWhere('business_id', business.id)
       .firstOrFail()
 
     await category.delete()
-    return { status: 'success', message: 'Category deleted' }
+
+    return { status: 'success', message: 'Categoría eliminada' }
   }
 }

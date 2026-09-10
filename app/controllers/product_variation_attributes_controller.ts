@@ -1,81 +1,95 @@
+import ProductAttributeValue from '#models/product_attribute_value'
+import ProductVariation from '#models/product_variation'
 import ProductVariationAttribute from '#models/product_variation_attribute'
 import type { HttpContext } from '@adonisjs/core/http'
 
 export default class ProductVariationAttributesController {
-  public async index({ params }: HttpContext) {
+  public async index({ params, business }: HttpContext) {
     const attrs = await ProductVariationAttribute.query()
-      .where('variation_id', params.variationId)
+      .where('business_id', business.id)
+      .andWhere('variation_id', params.variationId)
       .preload('value', (v) => v.preload('attribute'))
 
     return { status: 'success', data: attrs }
   }
 
-  public async store({ request }: HttpContext) {
+  /**
+   * Sincroniza de una vez los atributos de una variación: recibe la lista
+   * completa de valores y deja la variación exactamente con esos.
+   */
+  public async store({ request, business, response }: HttpContext) {
     const variationId = request.input('variationId')
-
-    // ✅ Nuevo: array de IDs para crear/actualizar en bulk
     const attributeValueIds = request.input('attributeValueIds') as number[] | undefined
 
     if (!variationId) {
-      return {
+      return response.unprocessableEntity({
         status: 'error',
         message: 'variationId es requerido',
-        data: [],
-      }
+      })
     }
 
-    if (Array.isArray(attributeValueIds)) {
-      // Sync completo de atributos de la variación
-      const existing = await ProductVariationAttribute.query().where('variation_id', variationId)
+    const variation = await ProductVariation.query()
+      .where('id', variationId)
+      .andWhere('business_id', business.id)
+      .first()
 
-      const existingValueIds = existing.map((a) => a.attributeValueId)
-
-      // IDs a eliminar (están en DB pero no en el array que mandamos)
-      const toDeleteIds = existing
-        .filter((a) => !attributeValueIds.includes(a.attributeValueId))
-        .map((a) => a.id)
-
-      if (toDeleteIds.length) {
-        await ProductVariationAttribute.query().whereIn('id', toDeleteIds).delete()
-      }
-
-      // IDs a crear (están en el array pero no en DB)
-      const toCreate = attributeValueIds.filter((id) => !existingValueIds.includes(id))
-
-      if (toCreate.length) {
-        await ProductVariationAttribute.createMany(
-          toCreate.map((valId) => ({
-            variationId,
-            attributeValueId: valId,
-          }))
-        )
-      }
-
-      // Recargar resultado
-      const synced = await ProductVariationAttribute.query()
-        .where('variation_id', variationId)
-        .preload('value', (v) => v.preload('attribute'))
-
-      return {
-        status: 'success',
-        message: 'Variation attributes synced',
-        data: synced,
-      }
+    if (!variation) {
+      return response.unprocessableEntity({
+        status: 'error',
+        message: 'La variación indicada no pertenece a este negocio',
+      })
     }
 
-    // ✅ Compat: modo viejo (un solo attributeValueId)
-    const data = request.only(['variationId', 'attributeValueId'])
-    const attr = await ProductVariationAttribute.create(data)
-    return {
-      status: 'success',
-      message: 'Variation attribute added',
-      data: attr,
+    const requested = Array.isArray(attributeValueIds) ? attributeValueIds : []
+
+    // Solo se aceptan valores del propio negocio: de lo contrario se podría
+    // etiquetar una variación con los colores de otra tienda.
+    const validValues = await ProductAttributeValue.query()
+      .where('business_id', business.id)
+      .whereIn('id', requested.length ? requested : [0])
+      .select('id')
+
+    const validIds = validValues.map((value) => value.id)
+
+    const existing = await ProductVariationAttribute.query()
+      .where('business_id', business.id)
+      .andWhere('variation_id', variation.id)
+
+    const existingValueIds = existing.map((a) => a.attributeValueId)
+
+    const toDelete = existing.filter((a) => !validIds.includes(a.attributeValueId)).map((a) => a.id)
+
+    if (toDelete.length) {
+      await ProductVariationAttribute.query().whereIn('id', toDelete).delete()
     }
+
+    const toCreate = validIds.filter((id) => !existingValueIds.includes(id))
+
+    if (toCreate.length) {
+      await ProductVariationAttribute.createMany(
+        toCreate.map((valueId) => ({
+          businessId: business.id,
+          variationId: variation.id,
+          attributeValueId: valueId,
+        }))
+      )
+    }
+
+    const synced = await ProductVariationAttribute.query()
+      .where('variation_id', variation.id)
+      .preload('value', (v) => v.preload('attribute'))
+
+    return { status: 'success', message: 'Atributos sincronizados', data: synced }
   }
 
-  public async destroy({ params }: HttpContext) {
-    const attr = await ProductVariationAttribute.findOrFail(params.id)
+  public async destroy({ params, business }: HttpContext) {
+    const attr = await ProductVariationAttribute.query()
+      .where('id', params.id)
+      .andWhere('business_id', business.id)
+      .firstOrFail()
+
     await attr.delete()
-    return { status: 'success', message: 'Variation attribute deleted' }
+
+    return { status: 'success', message: 'Atributo de variación eliminado' }
   }
 }

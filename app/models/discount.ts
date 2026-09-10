@@ -8,6 +8,9 @@ export default class Discount extends BaseModel {
   declare id: number
 
   @column()
+  declare businessId: number
+
+  @column()
   declare productId: number
 
   @column()

@@ -1,9 +1,19 @@
 /*
 |--------------------------------------------------------------------------
-| Routes file
+| Rutas
 |--------------------------------------------------------------------------
 |
-| The routes file is used for defining the HTTP routes.
+| La API tiene tres zonas:
+|
+|   1. Pública          — login y registro.
+|   2. Cuenta           — lo que un usuario hace sobre sí mismo o sus negocios.
+|   3. Negocio (tenant) — todo lo que pertenece a una tienda concreta, bajo
+|                         /api/b/:businessUuid. TenantMiddleware resuelve el
+|                         negocio desde la URL y comprueba que el usuario
+|                         puede operarlo, así que los controladores ya no
+|                         tienen que deducirlo.
+|
+| El grupo de superadmin va aparte, con su propio middleware de rol.
 |
 */
 
@@ -24,26 +34,84 @@ import ProductVariationAttributesController from '#controllers/product_variation
 import CategoriesController from '#controllers/categories_controller'
 import SubcategoriesController from '#controllers/subcategories_controller'
 import BusinessImagesController from '#controllers/business_images_controller'
+import InventoryController from '#controllers/inventory_controller'
+import TagsController from '#controllers/tags_controller'
+import StorefrontController from '#controllers/storefront_controller'
+import OrdersController from '#controllers/orders_controller'
+import StoreSettingsController from '#controllers/store_settings_controller'
+import MediaController from '#controllers/media_controller'
+import PaymentsController from '#controllers/payments_controller'
+import CustomersController from '#controllers/customers_controller'
+import PosController from '#controllers/pos_controller'
+import SuppliersController from '#controllers/suppliers_controller'
+import PurchasesController from '#controllers/purchases_controller'
+import ReportsController from '#controllers/reports_controller'
 
-router.get('/', async () => {
-  return {
-    hello: 'world',
-  }
-})
-router.post('/api/register', [AuthController, 'register']).as('auth.register')
-router.post('/api/newuser', [AuthController, 'createUser']).as('auth.createUser')
+router.get('/', async () => ({ hello: 'world' }))
 
+/*
+| Imágenes — públicas, sin token.
+|
+| El bucket es privado y el proveedor no deja abrirlo por API, así que el
+| servidor sirve de puente. La URL es estable y cacheable para siempre.
+*/
+router.get('/media/*', [MediaController, 'show']).as('media.show')
+
+/*
+| 1. Público
+*/
 router.post('/api/login', [AuthController, 'login']).as('auth.login')
+router.post('/api/register', [AuthController, 'register']).as('auth.register')
 
-// Grupo protegido
+/*
+| 1b. Tienda pública — SIN token
+|
+| Es lo que abre el cliente al escanear el QR. Solo responde si el negocio
+| está publicado (`is_public`), y devuelve campos filtrados a mano: nada de
+| costos, dueños ni productos inactivos.
+*/
 router
   .group(() => {
-    router.delete('/logout', [AuthController, 'logout']).as('auth.logout').use(middleware.auth())
-    router.post('/updatePassword', [AuthController, 'updatePassword']).as('auth.updatePassword')
+    router.get('/', [StorefrontController, 'show']).as('store.show')
+    router.get('/categories', [StorefrontController, 'categories']).as('store.categories')
+    router.get('/filters', [StorefrontController, 'filters']).as('store.filters')
+    router.get('/products', [StorefrontController, 'products']).as('store.products')
+    router.get('/products/:productSlug', [StorefrontController, 'product']).as('store.product')
+    router.post('/orders', [StorefrontController, 'createOrder']).as('store.orders.create')
+    router
+      .post('/orders/:code/sent', [StorefrontController, 'markOrderSent'])
+      .as('store.orders.sent')
+  })
+  .prefix('/api/store/:slug')
+
+/*
+| 2. Cuenta del usuario autenticado
+*/
+router
+  .group(() => {
     router.get('/me', [AuthController, 'me']).as('auth.me')
+    router.delete('/logout', [AuthController, 'logout']).as('auth.logout')
+    router.post('/updatePassword', [AuthController, 'updatePassword']).as('auth.updatePassword')
+
+    // Negocios del propio usuario
+    router.get('/businesses/byUser', [BusinessesController, 'getByUser']).as('business.byUser')
+    router.get('/businesses/byUuid/:uuid', [BusinessesController, 'getByUuid']).as('business.byUuid')
+    router.post('/businesses', [BusinessesController, 'store']).as('business.store')
+    router.get('/businesses/:id', [BusinessesController, 'show']).as('business.show')
+    router.put('/businesses/:id', [BusinessesController, 'update']).as('business.update')
+  })
+  .prefix('/api')
+  .use(middleware.auth({ guards: ['api'] }))
+
+/*
+| 3. Superadmin
+*/
+router
+  .group(() => {
+    router.get('/businesses', [BusinessesController, 'index']).as('business.index')
+    router.delete('/businesses/:id', [BusinessesController, 'destroy']).as('business.destroy')
 
     router.get('/users/admins', [UsersController, 'admins'])
-
     router.get('/users', [UsersController, 'index']).as('users.index')
     router.get('/users/:id', [UsersController, 'show']).as('users.show')
     router.post('/users', [UsersController, 'store']).as('users.store')
@@ -55,118 +123,66 @@ router
     router.post('/roles', [RolesController, 'store']).as('roles.store')
     router.put('/roles/:id', [RolesController, 'update']).as('roles.update')
     router.delete('/roles/:id', [RolesController, 'destroy']).as('roles.destroy')
+  })
+  .prefix('/api')
+  .use([middleware.auth({ guards: ['api'] }), middleware.role(['superadmin'])])
 
-    router.get('/businesses', [BusinessesController, 'index']).as('business.index')
-    router
-      .get('/businesses/byUuid/:uuid', [BusinessesController, 'getByUuid'])
-      .as('business.byUuid')
-    router.get('/businesses/byUser', [BusinessesController, 'getByUser']).as('business.byUser')
-    router.get('/businesses/:id', [BusinessesController, 'show']).as('business.show')
-    router.post('/businesses', [BusinessesController, 'store']).as('business.store')
-    router.put('/businesses/:id', [BusinessesController, 'update']).as('business.update')
-    router.delete('/businesses/:id', [BusinessesController, 'destroy']).as('business.destroy')
-    // PRODUCTS ROUTES
-    router.get('/products', [ProductsController, 'index']).as('products.index')
-    router
-      .get('/products/byBusiness/:businessId', [ProductsController, 'getByBusiness'])
-      .as('products.byBusiness')
+/*
+| 4. Negocio: todo lo que vive dentro de una tienda
+*/
+router
+  .group(() => {
+    // Productos
+    router.get('/products', [ProductsController, 'index'])
+    router.get('/products/:id', [ProductsController, 'show'])
+    router.post('/products', [ProductsController, 'store'])
+    router.put('/products/:id', [ProductsController, 'update'])
+    router.delete('/products/:id', [ProductsController, 'destroy'])
 
-    router.get('/products/:id', [ProductsController, 'show']).as('products.show')
-    router.post('/products', [ProductsController, 'store']).as('products.store')
-    router.put('/products/:id', [ProductsController, 'update']).as('products.update')
-    router.delete('/products/:id', [ProductsController, 'destroy']).as('products.destroy')
+    // Galería
+    router.get('/business-images', [BusinessImagesController, 'index'])
+    router.post('/business-images', [BusinessImagesController, 'store'])
+    router.post('/business-images/upload', [BusinessImagesController, 'upload'])
+    router.put('/business-images/:id', [BusinessImagesController, 'update'])
+    router.delete('/business-images/:id', [BusinessImagesController, 'destroy'])
 
-    // BUSINESS IMAGES ROUTES
-    router.get('/business-images', [BusinessImagesController, 'index']).as('business-image.index')
-    router
-      .get('/business-images/byBusiness/:businessId', [BusinessImagesController, 'getByBusiness'])
-      .as('business-image.byBusiness')
+    // Categorías
+    router.get('/categories', [CategoriesController, 'index'])
+    router.get('/categories/:id', [CategoriesController, 'show'])
+    router.post('/categories', [CategoriesController, 'store'])
+    router.put('/categories/:id', [CategoriesController, 'update'])
+    router.delete('/categories/:id', [CategoriesController, 'destroy'])
 
-    router.post('/business-images', [BusinessImagesController, 'store']).as('business-image.store')
-    router
-      .put('/business-images/:id', [BusinessImagesController, 'update'])
-      .as('business-image.update')
-    router
-      .delete('/business-images/:id', [BusinessImagesController, 'destroy'])
-      .as('business-image.destroy')
+    router.get('/subcategories', [SubcategoriesController, 'index'])
+    router.get('/subcategories/:id', [SubcategoriesController, 'show'])
+    router.post('/subcategories', [SubcategoriesController, 'store'])
+    router.put('/subcategories/:id', [SubcategoriesController, 'update'])
+    router.delete('/subcategories/:id', [SubcategoriesController, 'destroy'])
 
-    // CATEGORIES ROUTES
-    router.get('/categories', [CategoriesController, 'index']).as('category.index')
-    router
-      .get('/categories/byBusiness/:businessId', [CategoriesController, 'getByBusiness'])
-      .as('category.byBusiness')
+    router.get('/category-products', [CategoryProductsController, 'index'])
+    router.post('/category-products', [CategoryProductsController, 'store'])
+    router.delete('/category-products/:id', [CategoryProductsController, 'destroy'])
 
-    router.get('/categories/:id', [CategoriesController, 'show']).as('category.show')
-    router.post('/categories', [CategoriesController, 'store']).as('category.store')
-    router.put('/categories/:id', [CategoriesController, 'update']).as('category.update')
-    router.delete('/categories/:id', [CategoriesController, 'destroy']).as('category.destroy')
+    // Etiquetas
+    router.get('/tags', [TagsController, 'index'])
+    router.post('/tags', [TagsController, 'store'])
+    router.put('/tags/:id', [TagsController, 'update'])
+    router.delete('/tags/:id', [TagsController, 'destroy'])
+    router.put('/products/:productId/tags', [TagsController, 'syncForProduct'])
 
-    // SUBCATEGORIES ROUTES
-    router.get('/subcategories', [SubcategoriesController, 'index']).as('subcategory.index')
-    router
-      .get('/subcategories/byBusiness/:businessId', [SubcategoriesController, 'getByBusiness'])
-      .as('subcategory.byBusiness')
+    // Atributos y variaciones
+    router.get('/product-attributes', [ProductAttributesController, 'index'])
+    router.get('/product-attributes/:id', [ProductAttributesController, 'show'])
+    router.post('/product-attributes', [ProductAttributesController, 'store'])
+    router.put('/product-attributes/:id', [ProductAttributesController, 'update'])
+    router.delete('/product-attributes/:id', [ProductAttributesController, 'destroy'])
 
-    router.get('/subcategories/:id', [SubcategoriesController, 'show']).as('subcategory.show')
-    router.post('/subcategories', [SubcategoriesController, 'store']).as('subcategory.store')
-    router.put('/subcategories/:id', [SubcategoriesController, 'update']).as('subcategory.update')
-    router
-      .delete('/subcategories/:id', [SubcategoriesController, 'destroy'])
-      .as('subcategory.destroy')
-
-    // 🟢 Category Products
-    router
-      .get('/category-products', [CategoryProductsController, 'index'])
-      .as('categoryProducts.index')
-    // router
-    //   .get('/category-products/:id', [CategoryProductsController, 'show'])
-    //   .as('categoryProducts.show')
-    router
-      .post('/category-products', [CategoryProductsController, 'store'])
-      .as('categoryProducts.store')
-    // router
-    //   .put('/category-products/:id', [CategoryProductsController, 'update'])
-    //   .as('categoryProducts.update')
-    router
-      .delete('/category-products/:id', [CategoryProductsController, 'destroy'])
-      .as('categoryProducts.destroy')
-
-    // 🟢 Product Attributes
-    router
-      .get('/product-attributes', [ProductAttributesController, 'index'])
-      .as('productAttributes.index')
-    router
-      .get('/product-attributes/:id', [ProductAttributesController, 'show'])
-      .as('productAttributes.show')
-    router
-      .post('/product-attributes', [ProductAttributesController, 'store'])
-      .as('productAttributes.store')
-    router
-      .put('/product-attributes/:id', [ProductAttributesController, 'update'])
-      .as('productAttributes.update')
-    router
-      .delete('/product-attributes/:id', [ProductAttributesController, 'destroy'])
-      .as('productAttributes.destroy')
-
-    // 🟢 Product Attribute Values
-    router
-      .get('/product-attribute-values', [ProductAttributeValuesController, 'index'])
-      .as('productAttributeValues.index')
-    // router
-    //   .get('/product-attribute-values/:id', [ProductAttributeValuesController, 'show'])
-    //   .as('productAttributeValues.show')
-    router
-      .post('/product-attribute-values', [ProductAttributeValuesController, 'store'])
-      .as('productAttributeValues.store')
-    // router
-    //   .put('/product-attribute-values/:id', [ProductAttributeValuesController, 'update'])
-    //   .as('productAttributeValues.update')
-    router
-      .delete('/product-attribute-values/:id', [ProductAttributeValuesController, 'destroy'])
-      .as('productAttributeValues.destroy')
+    router.get('/product-attribute-values', [ProductAttributeValuesController, 'index'])
+    router.post('/product-attribute-values', [ProductAttributeValuesController, 'store'])
+    router.put('/product-attribute-values/:id', [ProductAttributeValuesController, 'update'])
+    router.delete('/product-attribute-values/:id', [ProductAttributeValuesController, 'destroy'])
 
     router.get('/product-variations', [ProductVariationsController, 'index'])
-
     router.post('/product-variations', [ProductVariationsController, 'store'])
     router.put('/product-variations/:id', [ProductVariationsController, 'update'])
     router.delete('/product-variations/:id', [ProductVariationsController, 'destroy'])
@@ -181,10 +197,64 @@ router
       'destroy',
     ])
 
-    router.get('/discounts', [DiscountsController, 'index']).as('discount.index')
-    router.post('/discounts', [DiscountsController, 'store']).as('discount.store')
-    router.put('/discounts/:id', [DiscountsController, 'update']).as('discount.update')
-    router.delete('/discounts/:id', [DiscountsController, 'destroy']).as('discount.destroy')
+    // Inventario (kardex)
+    router.get('/inventory/movements', [InventoryController, 'movements'])
+    router.get('/inventory/low-stock', [InventoryController, 'lowStock'])
+    router.post('/inventory/adjust', [InventoryController, 'adjust'])
+    router.post('/inventory/move', [InventoryController, 'move'])
+
+    // Pedidos
+    router.get('/orders', [OrdersController, 'index'])
+    router.get('/orders/summary', [OrdersController, 'summary'])
+    router.get('/orders/:id', [OrdersController, 'show'])
+    router.put('/orders/:id/status', [OrdersController, 'updateStatus'])
+    router.put('/orders/:id/shipping', [OrdersController, 'updateShipping'])
+
+    // Pagos del pedido
+    router.get('/orders/:orderId/payments', [PaymentsController, 'index'])
+    router.post('/orders/:orderId/payments', [PaymentsController, 'store'])
+    router.delete('/payments/:id', [PaymentsController, 'destroy'])
+
+    // Mostrador
+    router.get('/pos/search', [PosController, 'search'])
+    router.post('/pos/sell', [PosController, 'sell'])
+    router.get('/pos/ticket/:id', [PosController, 'ticket'])
+
+    // Proveedores y compras
+    router.get('/suppliers', [SuppliersController, 'index'])
+    router.post('/suppliers', [SuppliersController, 'store'])
+    router.put('/suppliers/:id', [SuppliersController, 'update'])
+    router.delete('/suppliers/:id', [SuppliersController, 'destroy'])
+
+    router.get('/purchases', [PurchasesController, 'index'])
+    router.get('/purchases/:id', [PurchasesController, 'show'])
+    router.post('/purchases', [PurchasesController, 'store'])
+    router.post('/purchases/:id/receive', [PurchasesController, 'receive'])
+    router.post('/purchases/:id/cancel', [PurchasesController, 'cancel'])
+
+    // Devoluciones
+    router.get('/returns', [PurchasesController, 'returnsIndex'])
+    router.post('/returns', [PurchasesController, 'createReturn'])
+
+    // Reportes
+    router.get('/reports/overview', [ReportsController, 'overview'])
+    router.get('/reports/sales', [ReportsController, 'sales'])
+    router.get('/reports/top-products', [ReportsController, 'topProducts'])
+
+    // Clientes
+    router.get('/customers', [CustomersController, 'index'])
+    router.get('/customers/:id', [CustomersController, 'show'])
+    router.put('/customers/:id', [CustomersController, 'update'])
+
+    // Configuración de la tienda pública
+    router.get('/store-settings', [StoreSettingsController, 'show'])
+    router.put('/store-settings', [StoreSettingsController, 'update'])
+
+    // Descuentos
+    router.get('/discounts', [DiscountsController, 'index'])
+    router.post('/discounts', [DiscountsController, 'store'])
+    router.put('/discounts/:id', [DiscountsController, 'update'])
+    router.delete('/discounts/:id', [DiscountsController, 'destroy'])
   })
-  .prefix('/api')
-  .use(middleware.auth({ guards: ['api'] }))
+  .prefix('/api/b/:businessUuid')
+  .use([middleware.auth({ guards: ['api'] }), middleware.tenant()])

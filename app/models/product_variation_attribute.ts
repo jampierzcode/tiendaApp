@@ -8,6 +8,9 @@ export default class ProductVariationAttribute extends BaseModel {
   declare id: number
 
   @column()
+  declare businessId: number
+
+  @column()
   declare variationId: number
 
   @column()

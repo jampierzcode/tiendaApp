@@ -16,7 +16,6 @@ export default class UpdateProductsAddBusinessImageId extends BaseSchema {
         .inTable('business_images')
         .onDelete('SET NULL')
         .nullable()
-        .after('business_id')
     })
   }
 

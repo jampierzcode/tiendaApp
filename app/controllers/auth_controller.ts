@@ -1,62 +1,80 @@
+import Role from '#models/role'
 import User from '#models/user'
-import { loginValidator, registerValidator } from '#validators/auth'
+import { loginValidator, registerValidator, updatePasswordValidator } from '#validators/auth'
+import hash from '@adonisjs/core/services/hash'
 import type { HttpContext } from '@adonisjs/core/http'
 
 export default class AuthController {
-  async updatePassword({ request }: HttpContext) {
-    const { email, newPassword } = request.only(['email', 'newPassword'])
+  /**
+   * Cambia la contraseña del usuario autenticado. El usuario sale del
+   * token, nunca del body, y se exige la contraseña actual.
+   */
+  async updatePassword({ auth, request, response }: HttpContext) {
+    const { currentPassword, newPassword } = await request.validateUsing(updatePasswordValidator)
+    const user = auth.user!
 
-    const user = await User.findBy('email', email)
-
-    if (!user) {
-      return {
+    if (!(await hash.verify(user.password, currentPassword))) {
+      return response.unauthorized({
         status: 'error',
-        message: 'Usuario no encontrado',
-      }
+        message: 'La contraseña actual no es correcta',
+      })
     }
 
     user.password = newPassword
     await user.save()
 
-    return {
-      data: user,
-      status: 'success',
-      message: 'Contraseña actualizada correctamente',
-    }
+    // Cerramos las demás sesiones: si la contraseña cambió, los tokens
+    // emitidos antes dejan de valer.
+    const tokens = await User.accessTokens.all(user)
+    await Promise.all(
+      tokens
+        .filter((token) => token.identifier !== user.currentAccessToken.identifier)
+        .map((token) => User.accessTokens.delete(user, token.identifier))
+    )
+
+    return { status: 'success', message: 'Contraseña actualizada correctamente' }
   }
 
-  async register({ request }: HttpContext) {
+  /**
+   * Registro público de dueños de tienda. El rol lo fija el servidor.
+   */
+  async register({ request, response }: HttpContext) {
     const data = await request.validateUsing(registerValidator)
-    const user = await User.create(data)
+    const adminRole = await Role.findBy('name', 'admin')
 
-    return User.accessTokens.create(user, ['*'], {
-      expiresIn: '30 days',
+    if (!adminRole) {
+      return response.internalServerError({
+        status: 'error',
+        message: 'El rol admin no existe. Corre el seeder inicial.',
+      })
+    }
+
+    const user = await User.create({
+      ...data,
+      rolId: adminRole.id,
+      status: 'activo',
+    })
+
+    const token = await User.accessTokens.create(user, ['*'], { expiresIn: '30 days' })
+
+    return response.created({
+      status: 'success',
+      message: 'Usuario registrado correctamente',
+      data: { user, token },
     })
   }
-  async createUser({ request }: HttpContext) {
-    try {
-      const data = await request.validateUsing(registerValidator)
-      const user = await User.create(data)
-      return {
-        status: 'success',
-        code: 201,
-        message: 'Usuario Creado correctamente',
-        data: user,
-      }
-    } catch (error) {
-      console.log(error)
-      return {
-        status: 'error',
-        code: 500,
-        message: 'Error creating plan',
-        error: error.message,
-      }
-    }
-  }
 
-  async login({ request }: HttpContext) {
+  async login({ request, response }: HttpContext) {
     const { email, password } = await request.validateUsing(loginValidator)
     const user = await User.verifyCredentials(email, password)
+
+    if (user.status !== 'activo') {
+      return response.forbidden({
+        status: 'error',
+        message: 'Tu cuenta está inactiva. Contacta al administrador.',
+      })
+    }
+
     return User.accessTokens.create(user)
   }
 
@@ -67,18 +85,12 @@ export default class AuthController {
   }
 
   async me({ auth }: HttpContext) {
-    const data_auth = await auth.check()
-    if (data_auth === false) {
-      return { user: data_auth }
-    } else {
-      // Cargar el usuario autenticado junto con el rol y el creador
-      const user = await User.query()
-        .where('id', auth.user!.id)
-        .preload('role')
-        .preload('businesses')
-        .firstOrFail()
-      // Devolver el usuario con los datos de rol y creador
-      return { user }
-    }
+    const user = await User.query()
+      .where('id', auth.user!.id)
+      .preload('role')
+      .preload('businesses')
+      .firstOrFail()
+
+    return { user }
   }
 }

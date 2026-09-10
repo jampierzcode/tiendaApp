@@ -7,12 +7,12 @@ export default class InicioAppSeeder extends BaseSeeder {
     // 🔹 Crear roles si no existen
     const rolesData = [{ name: 'superadmin' }, { name: 'admin' }]
 
-    const roles = await Promise.all(
-      rolesData.map(async (roleData) => {
-        const role = await Role.firstOrCreate({ name: roleData.name }, roleData)
-        return role
-      })
-    )
+    // En serie a propósito: con Promise.all los roles se insertaban a la vez
+    // y los ids salían en orden distinto en cada instalación.
+    const roles: Role[] = []
+    for (const roleData of rolesData) {
+      roles.push(await Role.firstOrCreate({ name: roleData.name }, roleData))
+    }
 
     const roleSuperAdmin = roles.find((r) => r.name === 'superadmin')!
     const roleAdmin = roles.find((r) => r.name === 'admin')!
