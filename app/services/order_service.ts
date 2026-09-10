@@ -139,7 +139,7 @@ export default class OrderService {
       for (const variation of variations) {
         const cantidad = cantidades.get(variation.id)!
         const producto = productoPorId.get(variation.productId)!
-        const precioLista = Number(variation.price) + Number(variation.priceModifier ?? 0)
+        const precioLista = Number(variation.price)
         const precio = PricingService.calcular(precioLista, producto.discounts)
 
         const lineTotal = PricingService.redondear(precio.final * cantidad)

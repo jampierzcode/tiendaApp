@@ -55,7 +55,6 @@ async function crearTienda() {
     isDefault: true,
     price: 100,
     stock: 100,
-    priceModifier: 0,
   })
 
   return { business, user, product, variation }

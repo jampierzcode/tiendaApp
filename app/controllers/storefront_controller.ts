@@ -204,6 +204,7 @@ export default class StorefrontController {
       .preload('tags')
       .preload('variations', (v) => {
         v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
+        v.preload('businessImage')
       })
       .first()
 
@@ -220,7 +221,7 @@ export default class StorefrontController {
         description: product.description,
         variations: product.variations.map((v) => {
           const precioVariacion = PricingService.calcular(
-            Number(v.price) + Number(v.priceModifier ?? 0),
+            Number(v.price),
             product.discounts
           )
 
@@ -230,6 +231,10 @@ export default class StorefrontController {
             isDefault: v.isDefault,
             stock: v.stock,
             disponible: v.stock > 0,
+            // Si la variación no tiene foto propia, la tienda cae en la del
+            // producto: así el beige y el negro se ven distintos, pero la S y
+            // la M del mismo color no obligan a subir la misma foto dos veces.
+            imageUrl: v.businessImage?.url ?? null,
             price: precioVariacion.final,
             originalPrice: precioVariacion.descuento > 0 ? precioVariacion.original : null,
             label: OrderService.etiquetaVariacion(v),

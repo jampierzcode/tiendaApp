@@ -18,9 +18,22 @@ export interface LineaMostrador {
   unitPrice?: number
 }
 
+/**
+ * Un cobro de la caja. Los tres campos opcionales son los mismos que pide el
+ * formulario de pagos de un pedido: en Yape o transferencia, el número de
+ * operación y la captura son la única prueba de que el dinero entró.
+ */
+export interface CobroMostrador {
+  method: MetodoPago
+  amount: number
+  reference?: string | null
+  note?: string | null
+  receiptImageId?: number | null
+}
+
 export interface VentaMostrador {
   items: LineaMostrador[]
-  payments: { method: MetodoPago; amount: number; reference?: string | null }[]
+  payments: CobroMostrador[]
   customerName?: string | null
   customerPhone?: string | null
   /** Descuento sobre el total de la venta, en porcentaje. */
@@ -134,7 +147,7 @@ export default class PosService {
         const { cantidad, precio: precioManual } = cantidades.get(variation.id)!
         const producto = productoPorId.get(variation.productId)!
 
-        const precioLista = Number(variation.price) + Number(variation.priceModifier ?? 0)
+        const precioLista = Number(variation.price)
         const conPromo = PricingService.calcular(precioLista, producto.discounts)
 
         // Si el vendedor tecleó un precio en caja, manda ese.
@@ -209,7 +222,9 @@ export default class PosService {
             orderId: order.id,
             method: pago.method,
             amount: monto,
-            reference: pago.reference ?? null,
+            reference: pago.reference?.trim() || null,
+            note: pago.note?.trim() || null,
+            receiptImageId: pago.receiptImageId ?? null,
             paidAt: DateTime.now(),
             userId: venta.userId,
           },

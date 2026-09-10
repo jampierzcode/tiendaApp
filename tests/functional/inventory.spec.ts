@@ -46,7 +46,6 @@ async function crearVariacion(stockInicial: number) {
     isDefault: true,
     price: 39.9,
     stock: 0,
-    priceModifier: 0,
   })
 
   if (stockInicial) {
@@ -137,7 +136,6 @@ test.group('Kardex de inventario', (group) => {
       isDefault: false,
       price: 39.9,
       stock: 0,
-      priceModifier: 0,
     })
 
     await InventoryService.applyMovement({

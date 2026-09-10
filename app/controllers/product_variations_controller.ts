@@ -1,9 +1,32 @@
+import BusinessImage from '#models/business_image'
 import Product from '#models/product'
 import ProductVariation from '#models/product_variation'
 import InventoryService from '#services/inventory_service'
 import type { HttpContext } from '@adonisjs/core/http'
 
 export default class ProductVariationsController {
+  /**
+   * La imagen tiene que salir de la galería de este mismo negocio: sin esta
+   * comprobación, mandar un id cualquiera colgaría la foto de otra tienda.
+   * Devuelve `undefined` si el campo no viene, para poder distinguir "no lo
+   * tocó" de "lo quitó" (null).
+   */
+  private static async imagenDelNegocio(businessId: number, valor: unknown) {
+    if (valor === undefined) return undefined
+    if (valor === null || valor === '') return null
+
+    const imagen = await BusinessImage.query()
+      .where('id', Number(valor))
+      .andWhere('business_id', businessId)
+      .first()
+
+    if (!imagen) {
+      throw new Error('La imagen elegida no pertenece a este negocio')
+    }
+
+    return imagen.id
+  }
+
   public async index({ business, request }: HttpContext) {
     const productId = request.input('productId')
 
@@ -17,13 +40,21 @@ export default class ProductVariationsController {
       .preload('attributes', (attr) => {
         attr.preload('value', (v) => v.preload('attribute'))
       })
+      .preload('businessImage')
       .orderBy('is_default', 'desc')
 
     return { status: 'success', data: variations }
   }
 
   public async store({ request, business, auth, response }: HttpContext) {
-    const data = request.only(['product_id', 'sku', 'price', 'stock', 'weight', 'price_modifier'])
+    const data = request.only([
+      'product_id',
+      'sku',
+      'price',
+      'stock',
+      'weight',
+      'business_image_id',
+    ])
 
     const product = await Product.query()
       .where('id', data.product_id)
@@ -37,6 +68,16 @@ export default class ProductVariationsController {
       })
     }
 
+    let businessImageId: number | null | undefined
+    try {
+      businessImageId = await ProductVariationsController.imagenDelNegocio(
+        business.id,
+        data.business_image_id
+      )
+    } catch (error) {
+      return response.unprocessableEntity({ status: 'error', message: (error as Error).message })
+    }
+
     // El stock nunca se escribe directo: entra como movimiento de kardex.
     const variation = await ProductVariation.create({
       businessId: business.id,
@@ -46,7 +87,7 @@ export default class ProductVariationsController {
       price: data.price,
       stock: 0,
       weight: data.weight ?? null,
-      priceModifier: data.price_modifier ?? 0,
+      businessImageId: businessImageId ?? null,
     })
 
     const openingStock = Number(data.stock ?? 0)
@@ -64,22 +105,41 @@ export default class ProductVariationsController {
       await variation.refresh()
     }
 
+    await variation.load('businessImage')
+
     return { status: 'success', message: 'Variación creada', data: variation }
   }
 
-  public async update({ params, request, business, auth }: HttpContext) {
+  public async update({ params, request, business, auth, response }: HttpContext) {
     const variation = await ProductVariation.query()
       .where('id', params.id)
       .andWhere('business_id', business.id)
       .firstOrFail()
 
-    const data = request.only(['sku', 'price', 'stock', 'weight', 'price_modifier'])
+    const data = request.only([
+      'sku',
+      'price',
+      'stock',
+      'weight',
+      'business_image_id',
+    ])
+
+    let businessImageId: number | null | undefined
+    try {
+      businessImageId = await ProductVariationsController.imagenDelNegocio(
+        business.id,
+        data.business_image_id
+      )
+    } catch (error) {
+      return response.unprocessableEntity({ status: 'error', message: (error as Error).message })
+    }
 
     variation.merge({
       sku: data.sku ?? variation.sku,
       price: data.price ?? variation.price,
       weight: data.weight ?? variation.weight,
-      priceModifier: data.price_modifier ?? variation.priceModifier,
+      // `undefined` es "no lo mandó"; `null` es "quitó la foto".
+      businessImageId: businessImageId === undefined ? variation.businessImageId : businessImageId,
     })
     await variation.save()
 
@@ -98,6 +158,7 @@ export default class ProductVariationsController {
     await variation.load('attributes', (attr) => {
       attr.preload('value', (v) => v.preload('attribute'))
     })
+    await variation.load('businessImage')
 
     return { status: 'success', message: 'Variación actualizada', data: variation }
   }

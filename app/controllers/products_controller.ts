@@ -108,7 +108,6 @@ export default class ProductsController {
           isDefault: true,
           price: data.price,
           stock: 0,
-          priceModifier: 0,
         },
         { client: trx }
       )

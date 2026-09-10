@@ -193,7 +193,6 @@ export default class extends BaseSeeder {
             isDefault: false,
             price: item.price,
             stock: 0,
-            priceModifier: 0,
           })
 
           await ProductVariationAttribute.createMany([

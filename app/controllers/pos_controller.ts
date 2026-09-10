@@ -1,3 +1,4 @@
+import BusinessImage from '#models/business_image'
 import Order from '#models/order'
 import Product from '#models/product'
 import { OrderError } from '#services/order_service'
@@ -47,7 +48,7 @@ export default class PosController {
             id: v.id,
             sku: v.sku,
             stock: v.stock,
-            price: Number(v.price) + Number(v.priceModifier ?? 0),
+            price: Number(v.price),
             isDefault: v.isDefault,
             label: v.attributes
               .map((a) => a.value?.value)
@@ -60,10 +61,32 @@ export default class PosController {
   }
 
   public async sell({ business, request, auth, response }: HttpContext) {
+    const payments = request.input('payments', [])
+
+    // Los comprobantes tienen que salir de la galería de este negocio, igual
+    // que al registrar un pago de un pedido: sin comprobarlo, un id cualquiera
+    // colgaría de la venta la captura de otra tienda.
+    const comprobantes = payments
+      .map((p: any) => p?.receiptImageId)
+      .filter((id: unknown) => id !== undefined && id !== null)
+
+    if (comprobantes.length) {
+      const encontradas = await BusinessImage.query()
+        .where('business_id', business.id)
+        .whereIn('id', comprobantes.map(Number))
+
+      if (encontradas.length !== new Set(comprobantes.map(Number)).size) {
+        return response.unprocessableEntity({
+          status: 'error',
+          message: 'El comprobante no pertenece a este negocio',
+        })
+      }
+    }
+
     try {
       const { order, vuelto } = await PosService.vender(business, {
         items: request.input('items', []),
-        payments: request.input('payments', []),
+        payments,
         customerName: request.input('customerName'),
         customerPhone: request.input('customerPhone'),
         discountPercentage: Number(request.input('discountPercentage', 0)),

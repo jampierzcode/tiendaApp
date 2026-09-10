@@ -1,4 +1,5 @@
 import { BaseModel, column, hasMany, belongsTo } from '@adonisjs/lucid/orm'
+import BusinessImage from '#models/business_image'
 import Product from '#models/product'
 import ProductVariationAttribute from '#models/product_variation_attribute'
 import StockMovement from '#models/stock_movement'
@@ -37,8 +38,16 @@ export default class ProductVariation extends BaseModel {
   @column()
   declare weight: number | null
 
+  /**
+   * Foto propia de esta variación. Si es null se usa la del producto: el
+   * beige y el negro del mismo abrigo sí necesitan foto distinta, pero la S y
+   * la M del mismo color no.
+   */
   @column()
-  declare priceModifier: number
+  declare businessImageId: number | null
+
+  @belongsTo(() => BusinessImage, { foreignKey: 'businessImageId' })
+  declare businessImage: BelongsTo<typeof BusinessImage>
 
   @belongsTo(() => Product)
   declare product: BelongsTo<typeof Product>
