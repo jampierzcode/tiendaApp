@@ -9,11 +9,21 @@ import env from '#start/env'
  * Se configura con CORS_ORIGINS en el .env, separado por comas:
  *   CORS_ORIGINS=http://localhost:5173,https://tienda.midominio.com
  */
-const allowedOrigins = env
-  .get('CORS_ORIGINS', 'http://localhost:5173')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean)
+const configurado = env.get('CORS_ORIGINS', 'http://localhost:5173').trim()
+
+/**
+ * `*` tiene que llegar como string, no dentro de una lista: el paquete
+ * compara `allowedOrigins === '*'` y un `['*']` no casa con ningún origen,
+ * así que bloquearía todo en vez de abrir todo. Con credenciales activas
+ * devuelve el origen que preguntó, que es lo que exige la especificación.
+ */
+const allowedOrigins =
+  configurado === '*'
+    ? '*'
+    : configurado
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)
 
 const corsConfig = defineConfig({
   enabled: true,
