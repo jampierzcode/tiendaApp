@@ -43,7 +43,6 @@ Variables que hay que completar en `.env`:
 |---|---|
 | `DB_*` | Conexión a PostgreSQL |
 | `APP_KEY` | Firma de sesiones y tokens |
-| `APP_URL` | URL pública de la API, para armar los enlaces de las imágenes |
 | `CORS_ORIGINS` | Orígenes permitidos, separados por comas |
 | `S3_*` | Bucket S3-compatible donde viven las imágenes |
 | `S3_PUBLIC_URL` | Solo si el bucket es de lectura pública (ver más abajo) |
@@ -102,6 +101,11 @@ sirven a través de `GET /media/<key>`: el servidor lee con sus credenciales y
 devuelve el archivo con caché de un año. La URL es estable, sin token y no
 caduca.
 
+En la base se guarda **relativa** (`/media/<key>`), sin dominio. La API le
+antepone el origen del request al leerla (`BusinessImage.url`), así que la misma
+fila funciona en local y en producción y no hace falta configurar el dominio de
+la API en ninguna variable.
+
 Si el bucket se abre a lectura pública, basta con definir `S3_PUBLIC_URL` y las
 URLs pasan a apuntar directo al bucket **sin tocar código**.
 
@@ -147,10 +151,10 @@ cd tiendaAppFront && npm run build # deja el resultado en dist/
 En producción, antes de arrancar:
 
 1. `NODE_ENV=production`
-2. `node ace migration:run --force`
+2. `node ace migration:run --force` — en Railway ya corre solo antes de cada
+   despliegue (`preDeployCommand` en `railway.json`)
 3. `CORS_ORIGINS` con el dominio real del panel
-4. `APP_URL` con el dominio real de la API
-5. Servir `dist/` con *fallback* a `index.html` — el front usa rutas del
+4. Servir `dist/` con *fallback* a `index.html` — el front usa rutas del
    navegador y `/t/mi-tienda` tiene que llegar a React, no dar 404.
 
 ### Copias de seguridad

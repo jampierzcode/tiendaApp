@@ -1,4 +1,5 @@
 import env from '#start/env'
+import { HttpContext } from '@adonisjs/core/http'
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -99,8 +100,10 @@ export default class StorageService {
   }
 
   /**
-   * URL con la que se publica la imagen. Directa al bucket si está abierto,
-   * y si no, a través de nuestro `/media`.
+   * Lo que se guarda en la base. Directa al bucket si está abierto, y si no,
+   * la ruta relativa `/media/<key>`: sin dominio, porque la API no tiene por
+   * qué saber en qué dominio vive. El mismo registro sirve en local y en
+   * producción.
    */
   static urlPublica(key: string) {
     const dominioPublico = env.get('S3_PUBLIC_URL')
@@ -109,8 +112,26 @@ export default class StorageService {
       return `${dominioPublico.replace(/\/$/, '')}/${key}`
     }
 
-    const base = env.get('APP_URL', `http://${env.get('HOST')}:${env.get('PORT')}`)
-    return `${base.replace(/\/$/, '')}/media/${key}`
+    return `/media/${key}`
+  }
+
+  /**
+   * Completa una ruta relativa con el origen del request en curso, que es el
+   * dominio por el que el cliente llegó a esta API. Las URLs externas pasan
+   * tal cual. Fuera de un request (comandos, seeders) la deja relativa.
+   */
+  static urlAbsoluta(url: string | null) {
+    if (!url?.startsWith('/')) return url
+
+    const ctx = HttpContext.get()
+    if (!ctx) return url
+
+    return `${ctx.request.protocol()}://${ctx.request.host()}${url}`
+  }
+
+  /** Inverso de `urlAbsoluta`: quita el origen a nuestras rutas de `/media`. */
+  static urlRelativa(url: string | null) {
+    return url?.replace(/^https?:\/\/[^/]+(?=\/media\/businesses\/)/, '') ?? url
   }
 
   /**

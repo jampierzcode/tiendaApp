@@ -23,7 +23,15 @@ export const http = defineConfig({
    * Enabling async local storage will let you access HTTP context
    * from anywhere inside your application.
    */
-  useAsyncLocalStorage: false,
+  useAsyncLocalStorage: true,
+
+  /**
+   * Railway termina el TLS en su proxy y nos llega HTTP plano. Confiar en él
+   * hace que `request.protocol()` y `request.host()` lean los `X-Forwarded-*`
+   * y devuelvan el dominio público real, que es con lo que se arman las URLs
+   * de las imágenes.
+   */
+  trustProxy: () => true,
 
   /**
    * Manage cookies configuration. The settings for the session id cookie are

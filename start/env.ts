@@ -48,8 +48,6 @@ export default await Env.create(new URL('../', import.meta.url), {
   S3_SECRET_ACCESS_KEY: Env.schema.string(),
   /** Dominio público del bucket, si lo abres desde el panel del proveedor. */
   S3_PUBLIC_URL: Env.schema.string.optional(),
-  /** URL pública de esta API, para construir los enlaces de /media. */
-  APP_URL: Env.schema.string.optional(),
   /** Zona horaria en la que se agrupan los reportes. */
   REPORTS_TIMEZONE: Env.schema.string.optional(),
 })
