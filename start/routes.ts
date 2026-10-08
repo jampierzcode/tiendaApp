@@ -75,8 +75,10 @@ router
     router.get('/', [StorefrontController, 'show']).as('store.show')
     router.get('/categories', [StorefrontController, 'categories']).as('store.categories')
     router.get('/filters', [StorefrontController, 'filters']).as('store.filters')
+    router.get('/facets', [StorefrontController, 'facets']).as('store.facets')
     router.get('/products', [StorefrontController, 'products']).as('store.products')
     router.get('/products/:productSlug', [StorefrontController, 'product']).as('store.product')
+    router.get('/products/:productSlug/related', [StorefrontController, 'related']).as('store.related')
     router.post('/orders', [StorefrontController, 'createOrder']).as('store.orders.create')
     router
       .post('/orders/:code/sent', [StorefrontController, 'markOrderSent'])

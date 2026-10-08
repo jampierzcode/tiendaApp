@@ -6,6 +6,8 @@ import ProductAttribute from '#models/product_attribute'
 import OrderService, { OrderError } from '#services/order_service'
 import PricingService from '#services/pricing_service'
 import type { HttpContext } from '@adonisjs/core/http'
+import db from '@adonisjs/lucid/services/db'
+import type { ModelQueryBuilderContract } from '@adonisjs/lucid/types/model'
 
 /**
  * Tienda pública. Sin token: es lo que abre el cliente al escanear el QR.
@@ -109,6 +111,190 @@ export default class StorefrontController {
     }
   }
 
+  /**
+   * Aplica a una consulta de productos los filtros del catálogo. `omitir`
+   * deja fuera algunos: para contar cuántos productos tiene cada valor de un
+   * filtro hay que ignorar el propio filtro, si no el resto se vería en 0.
+   */
+  private async filtrar(
+    query: ModelQueryBuilderContract<typeof Product, Product>,
+    businessId: number,
+    request: HttpContext['request'],
+    omitir: ('categoria' | 'etiqueta' | 'atributos')[] = []
+  ) {
+    const search = String(request.input('search') ?? '').trim()
+    const categorySlug = request.input('category')
+    const subcategorySlug = request.input('subcategory')
+    const tagSlug = request.input('tag')
+    const minPrice = request.input('minPrice')
+    const maxPrice = request.input('maxPrice')
+    const valueIds = this.comoLista(request.input('attributeValues'))
+
+    // Cada palabra tiene que aparecer en el nombre, el SKU o la descripción
+    // (donde viven la referencia OEM y la aplicación): "bobina accent" y
+    // "27301-03200" encuentran lo mismo que escribiría un mecánico.
+    for (const palabra of search.split(/\s+/).filter(Boolean).slice(0, 6)) {
+      const like = `%${palabra}%`
+      query.where((q) => {
+        q.whereILike('name', like).orWhereILike('sku', like).orWhereILike('description', like)
+      })
+    }
+
+    if (!omitir.includes('categoria')) {
+      if (categorySlug) {
+        query.whereHas('categoryLinks', (link) => {
+          link.whereHas('category', (c) => c.where('slug', categorySlug))
+        })
+      }
+      if (subcategorySlug) {
+        query.whereHas('categoryLinks', (link) => {
+          link.whereHas('subcategory', (s) => s.where('slug', subcategorySlug))
+        })
+      }
+    }
+
+    if (tagSlug && !omitir.includes('etiqueta')) {
+      query.whereHas('tags', (t) => t.where('tags.slug', tagSlug))
+    }
+
+    if (minPrice) query.where('price', '>=', Number(minPrice))
+    if (maxPrice) query.where('price', '<=', Number(maxPrice))
+
+    // Dentro de un mismo atributo los valores suman (Toyota O Nissan); entre
+    // atributos se exigen todos (marca NDC Y medida 0.25).
+    if (valueIds.length && !omitir.includes('atributos')) {
+      const filas = await db
+        .from('product_attribute_values')
+        .where('business_id', businessId)
+        .whereIn('id', valueIds)
+        .select('id', 'attribute_id')
+
+      const porAtributo = new Map<number, number[]>()
+      for (const f of filas) {
+        porAtributo.set(f.attribute_id, [...(porAtributo.get(f.attribute_id) ?? []), f.id])
+      }
+      for (const ids of porAtributo.values()) {
+        query.whereHas('variations', (v) => {
+          v.whereHas('attributes', (a) => a.whereIn('attribute_value_id', ids))
+        })
+      }
+    }
+  }
+
+  private async idsDelCatalogo(
+    business: Business,
+    request: HttpContext['request'],
+    omitir: ('categoria' | 'etiqueta' | 'atributos')[] = []
+  ) {
+    const query = Product.query().where('business_id', business.id).andWhere('status', 'activo')
+    await this.filtrar(query, business.id, request, omitir)
+    const filas = await query.select('id')
+    return filas.map((p) => p.id)
+  }
+
+  /**
+   * Lo que el cliente puede filtrar, con cuántos productos hay detrás de cada
+   * opción dado lo que ya eligió. Una opción en 0 no se muestra: es lo que
+   * evita el «no encontramos nada» después de hacer clic.
+   */
+  public async facets({ params, request, response }: HttpContext) {
+    const business = await this.tiendaPublica(params.slug)
+
+    if (!business) {
+      return response.notFound({ status: 'error', message: 'Tienda no encontrada' })
+    }
+
+    // Categorías: cuentan sobre lo buscado, sin importar la categoría elegida.
+    const idsCategorias = await this.idsDelCatalogo(business, request, ['categoria', 'etiqueta', 'atributos'])
+    const idsAtributos = await this.idsDelCatalogo(business, request, ['atributos'])
+    const idsEtiquetas = await this.idsDelCatalogo(business, request, ['etiqueta'])
+
+    const [porCategoria, porSubcategoria, categorias] = await Promise.all([
+      db
+        .from('category_product')
+        .whereIn('product_id', idsCategorias.length ? idsCategorias : [0])
+        .groupBy('category_id')
+        .select('category_id')
+        .countDistinct('product_id as total'),
+      db
+        .from('category_product')
+        .whereIn('product_id', idsCategorias.length ? idsCategorias : [0])
+        .whereNotNull('subcategory_id')
+        .groupBy('subcategory_id')
+        .select('subcategory_id')
+        .countDistinct('product_id as total'),
+      Category.query()
+        .where('business_id', business.id)
+        .preload('subcategories')
+        .orderBy('name', 'asc'),
+    ])
+    const totCat = new Map(porCategoria.map((r: any) => [r.category_id, Number(r.total)]))
+    const totSub = new Map(porSubcategoria.map((r: any) => [r.subcategory_id, Number(r.total)]))
+
+    const filasAtributos = await db
+      .from('product_variation_attributes as pva')
+      .join('product_variations as v', 'v.id', 'pva.variation_id')
+      .join('product_attribute_values as av', 'av.id', 'pva.attribute_value_id')
+      .join('product_attributes as a', 'a.id', 'av.attribute_id')
+      .where('a.business_id', business.id)
+      .andWhere('a.is_filterable', true)
+      .whereIn('v.product_id', idsAtributos.length ? idsAtributos : [0])
+      .groupBy('a.id', 'a.name', 'a.type', 'av.id', 'av.value', 'av.hex_color')
+      .select('a.id as attr_id', 'a.name as attr_name', 'a.type as attr_type', 'av.id as value_id', 'av.value', 'av.hex_color')
+      .countDistinct('v.product_id as total')
+      .orderBy('a.id')
+      .orderBy('av.value')
+
+    const atributos = new Map<number, any>()
+    for (const f of filasAtributos as any[]) {
+      if (!atributos.has(f.attr_id)) {
+        atributos.set(f.attr_id, { id: f.attr_id, name: f.attr_name, type: f.attr_type, values: [] })
+      }
+      atributos.get(f.attr_id).values.push({
+        id: f.value_id,
+        value: f.value,
+        hexColor: f.hex_color,
+        count: Number(f.total),
+      })
+    }
+
+    const filasEtiquetas = await db
+      .from('product_tag as pt')
+      .join('tags as t', 't.id', 'pt.tag_id')
+      .where('t.business_id', business.id)
+      .whereIn('pt.product_id', idsEtiquetas.length ? idsEtiquetas : [0])
+      .groupBy('t.id', 't.name', 't.slug', 't.color')
+      .select('t.name', 't.slug', 't.color')
+      .countDistinct('pt.product_id as total')
+      .orderByRaw('count(distinct pt.product_id) desc')
+      .orderBy('t.name')
+      .limit(40)
+
+    return {
+      status: 'success',
+      data: {
+        categories: categorias
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            slug: c.slug,
+            count: totCat.get(c.id) ?? 0,
+            subcategories: c.subcategories
+              .map((s) => ({ id: s.id, name: s.name, slug: s.slug, count: totSub.get(s.id) ?? 0 }))
+              .filter((s) => s.count > 0),
+          }))
+          .filter((c) => c.count > 0),
+        attributes: [...atributos.values()],
+        tags: (filasEtiquetas as any[]).map((t) => ({
+          name: t.name,
+          slug: t.slug,
+          color: t.color,
+          count: Number(t.total),
+        })),
+      },
+    }
+  }
+
   /** Catálogo con filtros, orden y paginación. */
   public async products({ params, request, response }: HttpContext) {
     const business = await this.tiendaPublica(params.slug)
@@ -119,14 +305,7 @@ export default class StorefrontController {
 
     const page = Math.max(1, Number(request.input('page', 1)))
     const perPage = Math.min(48, Math.max(1, Number(request.input('perPage', 12))))
-    const search = request.input('search')
-    const categorySlug = request.input('category')
-    const subcategorySlug = request.input('subcategory')
-    const tagSlug = request.input('tag')
-    const minPrice = request.input('minPrice')
-    const maxPrice = request.input('maxPrice')
     const sort = request.input('sort', 'recientes')
-    const valueIds = this.comoLista(request.input('attributeValues'))
 
     const query = Product.query()
       .where('business_id', business.id)
@@ -134,41 +313,12 @@ export default class StorefrontController {
       .preload('businessImages')
       .preload('discounts')
       .preload('tags')
+      .preload('categoryLinks', (l) => l.preload('category').preload('subcategory'))
       .preload('variations', (v) => {
         v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
       })
 
-    if (search) {
-      query.whereILike('name', `%${search}%`)
-    }
-
-    if (categorySlug) {
-      query.whereHas('categoryLinks', (link) => {
-        link.whereHas('category', (c) => c.where('slug', categorySlug))
-      })
-    }
-
-    if (subcategorySlug) {
-      query.whereHas('categoryLinks', (link) => {
-        link.whereHas('subcategory', (s) => s.where('slug', subcategorySlug))
-      })
-    }
-
-    if (tagSlug) {
-      query.whereHas('tags', (t) => t.where('tags.slug', tagSlug))
-    }
-
-    if (minPrice) query.where('price', '>=', Number(minPrice))
-    if (maxPrice) query.where('price', '<=', Number(maxPrice))
-
-    // Un producto entra si ALGUNA de sus variaciones tiene el valor pedido:
-    // quien filtra por "talla M" quiere ver el polo, no descartarlo porque
-    // también existe en S.
-    if (valueIds.length) {
-      query.whereHas('variations', (v) => {
-        v.whereHas('attributes', (a) => a.whereIn('attribute_value_id', valueIds))
-      })
-    }
+    await this.filtrar(query, business.id, request)
 
     const orden: Record<string, [string, 'asc' | 'desc']> = {
       recientes: ['id', 'desc'],
@@ -188,6 +338,61 @@ export default class StorefrontController {
     }
   }
 
+  /**
+   * Productos parecidos: primero los de su misma subcategoría, luego los de
+   * su categoría. Es lo que mantiene al cliente comparando en vez de volver
+   * atrás.
+   */
+  public async related({ params, response }: HttpContext) {
+    const business = await this.tiendaPublica(params.slug)
+
+    if (!business) {
+      return response.notFound({ status: 'error', message: 'Tienda no encontrada' })
+    }
+
+    const actual = await Product.query()
+      .where('business_id', business.id)
+      .andWhere('slug', params.productSlug)
+      .preload('categoryLinks')
+      .first()
+
+    if (!actual) {
+      return response.notFound({ status: 'error', message: 'Producto no encontrado' })
+    }
+
+    const subIds = actual.categoryLinks.map((l) => l.subcategoryId).filter((v): v is number => !!v)
+    const catIds = actual.categoryLinks.map((l) => l.categoryId)
+    const limite = 8
+    const elegidos: Product[] = []
+
+    const cargar = async (columna: 'subcategory_id' | 'category_id', ids: number[]) => {
+      if (!ids.length || elegidos.length >= limite) return
+      const excluir = [actual.id, ...elegidos.map((p) => p.id)]
+      const filas = await Product.query()
+        .where('business_id', business.id)
+        .andWhere('status', 'activo')
+        .whereNotIn('id', excluir)
+        .whereHas('categoryLinks', (l) => l.whereIn(columna, ids))
+        .preload('businessImages')
+        .preload('discounts')
+        .preload('tags')
+        .preload('categoryLinks', (l) => l.preload('category').preload('subcategory'))
+        .preload('variations', (v) => {
+          v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
+        })
+        // Primero los que tienen foto: una fila de «Sin foto» no invita a nada.
+        .orderByRaw('(business_image_id is null) asc')
+        .orderBy('id', 'desc')
+        .limit(limite - elegidos.length)
+      elegidos.push(...filas)
+    }
+
+    await cargar('subcategory_id', subIds)
+    await cargar('category_id', catIds)
+
+    return { status: 'success', data: elegidos.map((p) => this.resumenProducto(p, business)) }
+  }
+
   /** Ficha del producto, con sus variaciones y stock real. */
   public async product({ params, response }: HttpContext) {
     const business = await this.tiendaPublica(params.slug)
@@ -203,6 +408,7 @@ export default class StorefrontController {
       .preload('businessImages')
       .preload('discounts')
       .preload('tags')
+      .preload('categoryLinks', (l) => l.preload('category').preload('subcategory'))
       .preload('variations', (v) => {
         v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
         v.preload('businessImage')
@@ -220,6 +426,12 @@ export default class StorefrontController {
       data: {
         ...this.resumenProducto(product, business),
         description: product.description,
+        categorias: product.categoryLinks.map((l) => ({
+          category: { name: l.category.name, slug: l.category.slug },
+          subcategory: l.subcategory
+            ? { name: l.subcategory.name, slug: l.subcategory.slug }
+            : null,
+        })),
         variations: product.variations.map((v) => {
           const precioVariacion = PricingService.calcular(
             Number(v.price),
@@ -358,6 +570,9 @@ export default class StorefrontController {
       id: product.id,
       name: product.name,
       slug: product.slug,
+      sku: product.sku,
+      categoria:
+        product.categoryLinks?.[0]?.subcategory?.name ?? product.categoryLinks?.[0]?.category?.name ?? null,
       imageUrl: product.businessImages?.url ?? null,
       price: precio.final,
       originalPrice: precio.descuento > 0 ? precio.original : null,
