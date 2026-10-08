@@ -49,6 +49,7 @@ export default class StorefrontController {
           business.freeShippingFrom === null ? null : Number(business.freeShippingFrom),
         aceptaPedidos: business.puedeVender,
         phone: business.phone,
+        whatsappPhone: business.whatsappPhone,
         address: business.address,
         city: business.city,
         schedule: business.schedule,
