@@ -10,6 +10,8 @@ export type OrderStatus =
   | 'pendiente'
   | 'confirmado'
   | 'pagado'
+  | 'preparando'
+  | 'listo'
   | 'enviado'
   | 'entregado'
   | 'cancelado'
@@ -61,6 +63,13 @@ export default class Order extends BaseModel {
 
   @column()
   declare note: string | null
+
+  /** Mesa del restaurante ("5", "Terraza 2"), cuando el pedido es en mesa. */
+  @column()
+  declare tableLabel: string | null
+
+  @column.dateTime()
+  declare readyAt: DateTime | null
 
   @column()
   declare subtotal: number

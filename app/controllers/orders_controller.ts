@@ -1,6 +1,8 @@
 import Order, { type OrderStatus } from '#models/order'
 import InventoryService, { InsufficientStockError } from '#services/inventory_service'
 import OrderService from '#services/order_service'
+import IngredientService from '#services/ingredient_service'
+import NotificationService, { EVENTOS, type EventoPedido } from '#services/notification_service'
 import db from '@adonisjs/lucid/services/db'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
@@ -12,8 +14,10 @@ export default class OrdersController {
   /** Estados a los que se puede pasar desde cada estado. */
   private static transiciones: Record<OrderStatus, OrderStatus[]> = {
     pendiente: ['confirmado', 'cancelado'],
-    confirmado: ['pagado', 'enviado', 'cancelado'],
-    pagado: ['enviado', 'cancelado'],
+    confirmado: ['pagado', 'preparando', 'enviado', 'cancelado'],
+    pagado: ['preparando', 'enviado', 'cancelado'],
+    preparando: ['listo', 'cancelado'],
+    listo: ['enviado', 'entregado', 'cancelado'],
     enviado: ['entregado', 'devuelto'],
     entregado: ['devuelto'],
     cancelado: [],
@@ -28,7 +32,7 @@ export default class OrdersController {
 
     const query = Order.query()
       .where('business_id', business.id)
-      .preload('items')
+      .preload('items', (i) => i.preload('modifiers'))
       .preload('customer')
       .orderBy('id', 'desc')
 
@@ -80,7 +84,7 @@ export default class OrdersController {
     const order = await Order.query()
       .where('business_id', business.id)
       .andWhere('id', params.id)
-      .preload('items')
+      .preload('items', (i) => i.preload('modifiers'))
       .preload('customer')
       .preload('payments', (p) => p.preload('receipt').orderBy('paid_at', 'desc'))
       .firstOrFail()
@@ -121,13 +125,20 @@ export default class OrdersController {
       })
     }
 
+    // Tienda: se descuenta stock de las variaciones. Restaurante: se descuentan
+    // los insumos de la receta. En ambos casos solo al confirmar, una vez.
     const debeDescontar = nuevo === 'confirmado' && !order.stockCommittedAt
     const debeReponer =
       ['cancelado', 'devuelto'].includes(nuevo) && Boolean(order.stockCommittedAt)
+    let platosSinReceta: string[] = []
 
     try {
       await db.transaction(async (trx) => {
-        if (debeDescontar) {
+        if (debeDescontar && business.esRestaurante) {
+          const r = await IngredientService.consumirPedido(order, trx, auth.user!.id)
+          platosSinReceta = r.sinReceta
+          order.stockCommittedAt = DateTime.now()
+        } else if (debeDescontar) {
           for (const item of order.items) {
             if (!item.productVariationId) continue
             await InventoryService.applyMovement({
@@ -145,7 +156,10 @@ export default class OrdersController {
           order.stockCommittedAt = DateTime.now()
         }
 
-        if (debeReponer) {
+        if (debeReponer && business.esRestaurante) {
+          await IngredientService.reponerPedido(order, trx, auth.user!.id)
+          order.stockCommittedAt = null
+        } else if (debeReponer) {
           for (const item of order.items) {
             if (!item.productVariationId) continue
             await InventoryService.applyMovement({
@@ -163,6 +177,7 @@ export default class OrdersController {
           order.stockCommittedAt = null
         }
 
+        if (nuevo === 'listo' && !order.readyAt) order.readyAt = DateTime.now()
         if (nuevo === 'enviado' && !order.shippedAt) order.shippedAt = DateTime.now()
         if (nuevo === 'entregado' && !order.deliveredAt) order.deliveredAt = DateTime.now()
 
@@ -180,7 +195,24 @@ export default class OrdersController {
       throw error
     }
 
-    return { status: 'success', message: `Pedido marcado como ${nuevo}`, data: order }
+    // Aviso al cliente: si el bot está caído o el negocio no lo usa, no pasa nada.
+    if (request.input('notify', true) !== false && EVENTOS.includes(nuevo as EventoPedido)) {
+      try {
+        await NotificationService.notificar(business, order, nuevo as EventoPedido)
+      } catch {
+        // La notificación nunca debe tumbar un cambio de estado.
+      }
+    }
+
+    return {
+      status: 'success',
+      message: `Pedido marcado como ${nuevo}`,
+      data: order,
+      // Platos que se vendieron sin receta: su consumo no quedó registrado.
+      warnings: platosSinReceta.length
+        ? [`Sin receta, no se descontó inventario de: ${platosSinReceta.join(', ')}`]
+        : [],
+    }
   }
 
   /**

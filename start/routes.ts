@@ -46,6 +46,10 @@ import PosController from '#controllers/pos_controller'
 import SuppliersController from '#controllers/suppliers_controller'
 import PurchasesController from '#controllers/purchases_controller'
 import ReportsController from '#controllers/reports_controller'
+import ModifierGroupsController from '#controllers/modifier_groups_controller'
+import IngredientsController from '#controllers/ingredients_controller'
+import RecipesController from '#controllers/recipes_controller'
+import WhatsappBotController, { WhatsappPanelController } from '#controllers/whatsapp_controller'
 
 router.get('/', async () => ({ hello: 'world' }))
 
@@ -76,6 +80,10 @@ router
     router.get('/categories', [StorefrontController, 'categories']).as('store.categories')
     router.get('/filters', [StorefrontController, 'filters']).as('store.filters')
     router.get('/facets', [StorefrontController, 'facets']).as('store.facets')
+    router.get('/menu', [StorefrontController, 'menu']).as('store.menu')
+    router
+      .get('/orders/:code', [StorefrontController, 'orderTracking'])
+      .as('store.orders.tracking')
     router.get('/products', [StorefrontController, 'products']).as('store.products')
     router.get('/products/:productSlug', [StorefrontController, 'product']).as('store.product')
     router.get('/products/:productSlug/related', [StorefrontController, 'related']).as('store.related')
@@ -85,6 +93,19 @@ router
       .as('store.orders.sent')
   })
   .prefix('/api/store/:slug')
+
+/*
+| 1c. API del bot de WhatsApp — autenticada con x-bot-key, no con token.
+*/
+router
+  .group(() => {
+    router.get('/sessions', [WhatsappBotController, 'sessions'])
+    router.post('/sessions/:businessUuid', [WhatsappBotController, 'reportSession'])
+    router.post('/outbox/claim', [WhatsappBotController, 'claim'])
+    router.post('/outbox/:id/result', [WhatsappBotController, 'result'])
+    router.post('/inbound', [WhatsappBotController, 'inbound'])
+  })
+  .prefix('/api/bot')
 
 /*
 | 2. Cuenta del usuario autenticado
@@ -164,6 +185,31 @@ router
     router.get('/category-products', [CategoryProductsController, 'index'])
     router.post('/category-products', [CategoryProductsController, 'store'])
     router.delete('/category-products/:id', [CategoryProductsController, 'destroy'])
+
+    // Modificadores (restaurante)
+    router.get('/modifier-groups', [ModifierGroupsController, 'index'])
+    router.post('/modifier-groups', [ModifierGroupsController, 'store'])
+    router.put('/modifier-groups/:id', [ModifierGroupsController, 'update'])
+    router.delete('/modifier-groups/:id', [ModifierGroupsController, 'destroy'])
+    router.get('/products/:productId/modifier-groups', [ModifierGroupsController, 'forProduct'])
+    router.put('/products/:productId/modifier-groups', [ModifierGroupsController, 'syncForProduct'])
+
+    // Insumos y recetas (restaurante)
+    router.get('/ingredients', [IngredientsController, 'index'])
+    router.post('/ingredients', [IngredientsController, 'store'])
+    router.put('/ingredients/:id', [IngredientsController, 'update'])
+    router.delete('/ingredients/:id', [IngredientsController, 'destroy'])
+    router.get('/ingredients/:id/movements', [IngredientsController, 'movements'])
+    router.post('/ingredients/:id/movements', [IngredientsController, 'addMovement'])
+    router.get('/recipes', [RecipesController, 'index'])
+    router.get('/products/:productId/recipe', [RecipesController, 'show'])
+    router.put('/products/:productId/recipe', [RecipesController, 'sync'])
+
+    // Bot de WhatsApp
+    router.get('/whatsapp', [WhatsappPanelController, 'show'])
+    router.post('/whatsapp/connect', [WhatsappPanelController, 'connect'])
+    router.post('/whatsapp/disconnect', [WhatsappPanelController, 'disconnect'])
+    router.put('/whatsapp/templates', [WhatsappPanelController, 'saveTemplates'])
 
     // Etiquetas
     router.get('/tags', [TagsController, 'index'])

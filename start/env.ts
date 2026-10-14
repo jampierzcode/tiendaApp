@@ -48,6 +48,10 @@ export default await Env.create(new URL('../', import.meta.url), {
   S3_SECRET_ACCESS_KEY: Env.schema.string(),
   /** Dominio público del bucket, si lo abres desde el panel del proveedor. */
   S3_PUBLIC_URL: Env.schema.string.optional(),
+  /** Clave compartida con el servicio del bot de WhatsApp. */
+  BOT_API_KEY: Env.schema.string.optional(),
+  /** Dominio público de la tienda, para los enlaces que manda el bot. */
+  STORE_PUBLIC_URL: Env.schema.string.optional(),
   /** Zona horaria en la que se agrupan los reportes. */
   REPORTS_TIMEZONE: Env.schema.string.optional(),
 })

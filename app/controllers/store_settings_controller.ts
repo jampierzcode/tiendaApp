@@ -40,6 +40,7 @@ export default class StoreSettingsController {
       'shipping_cost',
       'free_shipping_from',
       'is_public',
+      'business_type',
     ])
 
     if (data.slug && data.slug !== business.slug) {
@@ -108,6 +109,9 @@ export default class StoreSettingsController {
             ? null
             : Number(data.free_shipping_from),
       isPublic: data.is_public === undefined ? business.isPublic : quierePublicar,
+      businessType: ['retail', 'restaurant'].includes(data.business_type)
+        ? data.business_type
+        : business.businessType,
     })
 
     await business.save()

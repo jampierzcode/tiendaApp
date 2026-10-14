@@ -99,6 +99,14 @@ export default class Business extends BaseModel {
   @column()
   declare isPublic: boolean
 
+  /** 'retail' (ropa, repuestos…) o 'restaurant' (menú digital). */
+  @column()
+  declare businessType: 'retail' | 'restaurant'
+
+  /** JSON con plantillas de WhatsApp por evento; null usa las de fábrica. */
+  @column()
+  declare notificationTemplates: string | null
+
   @column({ columnName: 'user_id' })
   declare userId: number
 
@@ -126,6 +134,15 @@ export default class Business extends BaseModel {
     if (!business.slug) {
       business.slug = await SlugService.uniqueSlugGlobal('businesses', business.name)
     }
+  }
+
+  get esRestaurante() {
+    return this.businessType === 'restaurant'
+  }
+
+  /** ¿Descuenta inventario? Un restaurante vende platos, no unidades en góndola. */
+  get controlaStock() {
+    return !this.esRestaurante
   }
 
   /** ¿Está lista para recibir pedidos? */

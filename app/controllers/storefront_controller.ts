@@ -1,6 +1,7 @@
 import Business from '#models/business'
 import Category from '#models/category'
 import Order from '#models/order'
+import ProductModifierGroup from '#models/product_modifier_group'
 import Product from '#models/product'
 import ProductAttribute from '#models/product_attribute'
 import OrderService, { OrderError } from '#services/order_service'
@@ -38,6 +39,7 @@ export default class StorefrontController {
       status: 'success',
       data: {
         slug: business.slug,
+        businessType: business.businessType,
         name: business.name,
         description: business.description,
         logoUrl: business.logoUrl,
@@ -58,6 +60,130 @@ export default class StorefrontController {
         instagram: business.instagram,
         facebook: business.facebook,
         tiktok: business.tiktok,
+      },
+    }
+  }
+
+
+  /**
+   * Menú digital: platos agrupados por categoría, cada uno con sus grupos de
+   * modificadores y reglas. Una sola llamada para pintar toda la carta.
+   */
+  public async menu({ params, response }: HttpContext) {
+    const business = await this.tiendaPublica(params.slug)
+
+    if (!business) {
+      return response.notFound({ status: 'error', message: 'Tienda no encontrada' })
+    }
+
+    const products = await Product.query()
+      .where('business_id', business.id)
+      .andWhere('status', 'activo')
+      .preload('businessImages')
+      .preload('discounts')
+      .preload('tags')
+      .preload('defaultVariation')
+      .preload('categoryLinks', (l) => l.preload('category'))
+      .orderBy('name', 'asc')
+
+    const reglas = await ProductModifierGroup.query()
+      .where('business_id', business.id)
+      .preload('group', (g) =>
+        g.where('is_active', true).preload('options', (o) =>
+          o.where('is_active', true).orderBy('sort_order', 'asc')
+        )
+      )
+      .orderBy('sort_order', 'asc')
+
+    const gruposPorProducto = new Map<number, any[]>()
+    for (const r of reglas) {
+      if (!r.group) continue
+      const lista = gruposPorProducto.get(r.productId) ?? []
+      lista.push({
+        groupId: r.group.id,
+        name: r.group.name,
+        description: r.group.description,
+        minSelect: r.minSelect,
+        maxSelect: r.maxSelect,
+        required: r.minSelect > 0,
+        options: r.group.options.map((o) => ({
+          id: o.id,
+          name: o.name,
+          priceDelta: Number(o.priceDelta),
+        })),
+      })
+      gruposPorProducto.set(r.productId, lista)
+    }
+
+    const categorias = await Category.query()
+      .where('business_id', business.id)
+      .orderBy('name', 'asc')
+
+    const platos = products.map((p) => {
+      const precio = PricingService.calcular(p.price, p.discounts)
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        description: p.description,
+        imageUrl: p.businessImages?.url ?? null,
+        price: precio.final,
+        originalPrice: precio.descuento > 0 ? precio.original : null,
+        categoryIds: p.categoryLinks.map((l) => l.categoryId),
+        tags: p.tags.map((t) => ({ name: t.name, color: t.color })),
+        modifierGroups: gruposPorProducto.get(p.id) ?? [],
+      }
+    })
+
+    return {
+      status: 'success',
+      data: {
+        categories: categorias
+          .map((c) => ({ id: c.id, name: c.name, slug: c.slug, imageUrl: c.imageUrl }))
+          .filter((c) => platos.some((p) => p.categoryIds.includes(c.id))),
+        products: platos,
+      },
+    }
+  }
+
+  /**
+   * Seguimiento público del pedido. Solo devuelve estado y platos: nada de
+   * teléfono ni dirección, porque el código es correlativo y adivinable.
+   */
+  public async orderTracking({ params, response }: HttpContext) {
+    const business = await this.tiendaPublica(params.slug)
+
+    if (!business) {
+      return response.notFound({ status: 'error', message: 'Tienda no encontrada' })
+    }
+
+    const order = await Order.query()
+      .where('business_id', business.id)
+      .andWhere('code', params.code)
+      .preload('items', (i) => i.preload('modifiers'))
+      .first()
+
+    if (!order) {
+      return response.notFound({ status: 'error', message: 'Pedido no encontrado' })
+    }
+
+    return {
+      status: 'success',
+      data: {
+        code: order.code,
+        status: order.status,
+        deliveryMethod: order.deliveryMethod,
+        tableLabel: order.tableLabel,
+        total: Number(order.total),
+        currencySymbol: business.currencySymbol,
+        createdAt: order.createdAt,
+        items: order.items.map((i) => ({
+          name: i.productName,
+          quantity: i.quantity,
+          lineTotal: Number(i.lineTotal),
+          modifiers: i.modifiers.map((m) => m.optionName),
+          note: i.note,
+        })),
       },
     }
   }
@@ -491,12 +617,15 @@ export default class StorefrontController {
       'deliveryMethod',
       'deliveryAddress',
       'deliveryCity',
+      'tableLabel',
       'note',
       'items',
     ])
 
     try {
-      const { order, whatsappUrl } = await OrderService.crearDesdeTienda(business, datos as any)
+      const { order, whatsappUrl } = business.esRestaurante
+        ? await OrderService.crearDesdeMenu(business, datos as any)
+        : await OrderService.crearDesdeTienda(business, datos as any)
 
       return response.created({
         status: 'success',
