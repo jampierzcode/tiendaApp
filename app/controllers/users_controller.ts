@@ -1,4 +1,6 @@
+import Business from '#models/business'
 import Role from '#models/role'
+import { randomUUID } from 'node:crypto'
 import User from '#models/user'
 import { createUserValidator } from '#validators/auth'
 import type { HttpContext } from '@adonisjs/core/http'
@@ -54,6 +56,26 @@ export default class UsersController {
       status: data.status ?? 'activo',
     })
 
+    // Si eligen un negocio existente se le pasa a este usuario; si no, el
+    // negocio se crea solo (un admin siempre necesita su tienda).
+    const businessId = Number(request.input('business_id') ?? request.input('restaurant_id'))
+    const role = await Role.find(user.rolId)
+
+    if (businessId) {
+      const business = await Business.find(businessId)
+      if (business) {
+        business.userId = user.id
+        await business.save()
+      }
+    } else if (role?.name === 'admin') {
+      await Business.create({
+        uuid: randomUUID(),
+        name: `Tienda de ${user.name}`,
+        userId: user.id,
+        status: 'activo',
+      })
+    }
+
     return response.created({ status: 'success', message: 'Usuario creado', data: user })
   }
 
@@ -85,6 +107,15 @@ export default class UsersController {
     }
 
     await user.save()
+
+    const businessId = Number(request.input('business_id') ?? request.input('restaurant_id'))
+    if (businessId) {
+      const business = await Business.find(businessId)
+      if (business && business.userId !== user.id) {
+        business.userId = user.id
+        await business.save()
+      }
+    }
 
     return { status: 'success', message: 'Usuario actualizado', data: user }
   }
