@@ -1,5 +1,6 @@
 import Business from '#models/business'
 import User from '#models/user'
+import CatalogCloneService from '#services/catalog_clone_service'
 import { randomUUID } from 'node:crypto'
 import type { HttpContext } from '@adonisjs/core/http'
 
@@ -114,5 +115,28 @@ export default class BusinessesController {
     await business.delete()
 
     return { status: 'success', message: 'Negocio eliminado' }
+  }
+
+  /**
+   * Copia el catálogo (productos, insumos, recetas, modificadores) de un
+   * negocio "molde" a este. Solo superadmin y solo sobre un negocio vacío.
+   */
+  public async cloneCatalog({ params, request, response }: HttpContext) {
+    const target = await Business.findOrFail(params.id)
+    const source = await Business.find(Number(request.input('source_business_id')))
+
+    if (!source) {
+      return response.unprocessableEntity({
+        status: 'error',
+        message: 'El negocio molde no existe',
+      })
+    }
+
+    try {
+      const summary = await CatalogCloneService.clone(source, target)
+      return { status: 'success', message: 'Catálogo copiado', data: summary }
+    } catch (error) {
+      return response.unprocessableEntity({ status: 'error', message: (error as Error).message })
+    }
   }
 }
