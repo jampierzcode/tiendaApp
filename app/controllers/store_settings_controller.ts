@@ -41,6 +41,8 @@ export default class StoreSettingsController {
       'free_shipping_from',
       'is_public',
       'business_type',
+      'payment_policy',
+      'payment_instructions',
     ])
 
     if (data.slug && data.slug !== business.slug) {
@@ -109,6 +111,13 @@ export default class StoreSettingsController {
             ? null
             : Number(data.free_shipping_from),
       isPublic: data.is_public === undefined ? business.isPublic : quierePublicar,
+      paymentPolicy: ['none', 'on_confirm', 'on_delivery'].includes(data.payment_policy)
+        ? data.payment_policy
+        : business.paymentPolicy,
+      paymentInstructions:
+        data.payment_instructions === undefined
+          ? business.paymentInstructions
+          : String(data.payment_instructions ?? '').trim().slice(0, 500) || null,
       businessType: ['retail', 'restaurant'].includes(data.business_type)
         ? data.business_type
         : business.businessType,

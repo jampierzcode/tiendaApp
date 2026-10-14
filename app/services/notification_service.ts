@@ -1,8 +1,10 @@
 import type Business from '#models/business'
 import type Order from '#models/order'
 import WhatsappOutbox from '#models/whatsapp_outbox'
+import WhatsappMessage from '#models/whatsapp_message'
 import WhatsappSession from '#models/whatsapp_session'
 import env from '#start/env'
+import { DateTime } from 'luxon'
 
 export type EventoPedido =
   | 'recibido'
@@ -65,11 +67,7 @@ export default class NotificationService {
 
     const simbolo = business.currencySymbol || 'S/'
     const entrega =
-      order.deliveryMethod === 'mesa'
-        ? `Te lo llevamos a la mesa ${order.tableLabel ?? ''}`.trim()
-        : order.deliveryMethod === 'recojo'
-          ? 'Puedes pasar a recogerlo.'
-          : ''
+      order.deliveryMethod === 'recojo' ? 'Puedes pasar a recogerlo.' : ''
 
     const cuerpo = this.plantillaDe(business, evento)
       .replaceAll('{{cliente}}', order.customerName)
@@ -80,14 +78,49 @@ export default class NotificationService {
       .replaceAll('{{seguimiento}}', this.enlaceSeguimiento(business, order))
       .trim()
 
-    await WhatsappOutbox.create({
-      businessId: business.id,
+    await this.encolar(business, {
       orderId: order.id,
-      phone: this.normalizarTelefono(order.customerPhone, business.whatsappPhone),
+      phone: order.customerPhone,
       event: evento,
       body: cuerpo,
+      automatic: true,
+    })
+  }
+
+  /** Encola el envío y lo deja anotado en la conversación del cliente. */
+  static async encolar(
+    business: Business,
+    m: { orderId?: number | null; phone: string; event: string; body: string; automatic: boolean }
+  ) {
+    const phone = this.normalizarTelefono(m.phone, business.whatsappPhone)
+    await WhatsappOutbox.create({
+      businessId: business.id,
+      orderId: m.orderId ?? null,
+      phone,
+      event: m.event,
+      body: m.body,
       status: 'pendiente',
       attempts: 0,
+    })
+    await this.registrar(business.id, phone, 'out', m.body, m.automatic)
+  }
+
+  static async registrar(
+    businessId: number,
+    phone: string,
+    direction: 'in' | 'out',
+    body: string,
+    automatic: boolean
+  ) {
+    const digitos = phone.replace(/\D/g, '')
+    return WhatsappMessage.create({
+      businessId,
+      phone: digitos,
+      contact: digitos.slice(-9),
+      direction,
+      body,
+      automatic,
+      readAt: direction === 'out' ? DateTime.now() : null,
     })
   }
 

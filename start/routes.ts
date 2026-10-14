@@ -157,6 +157,7 @@ router
   .group(() => {
     // Productos
     router.get('/products', [ProductsController, 'index'])
+    router.put('/products/reorder', [ProductsController, 'reorder'])
     router.get('/products/:id', [ProductsController, 'show'])
     router.post('/products', [ProductsController, 'store'])
     router.put('/products/:id', [ProductsController, 'update'])
@@ -171,12 +172,14 @@ router
 
     // Categorías
     router.get('/categories', [CategoriesController, 'index'])
+    router.put('/categories/reorder', [CategoriesController, 'reorder'])
     router.get('/categories/:id', [CategoriesController, 'show'])
     router.post('/categories', [CategoriesController, 'store'])
     router.put('/categories/:id', [CategoriesController, 'update'])
     router.delete('/categories/:id', [CategoriesController, 'destroy'])
 
     router.get('/subcategories', [SubcategoriesController, 'index'])
+    router.put('/subcategories/reorder', [SubcategoriesController, 'reorder'])
     router.get('/subcategories/:id', [SubcategoriesController, 'show'])
     router.post('/subcategories', [SubcategoriesController, 'store'])
     router.put('/subcategories/:id', [SubcategoriesController, 'update'])
@@ -210,6 +213,10 @@ router
     router.post('/whatsapp/connect', [WhatsappPanelController, 'connect'])
     router.post('/whatsapp/disconnect', [WhatsappPanelController, 'disconnect'])
     router.put('/whatsapp/templates', [WhatsappPanelController, 'saveTemplates'])
+    router.get('/whatsapp/unread', [WhatsappPanelController, 'unread'])
+    router.get('/whatsapp/conversations', [WhatsappPanelController, 'conversations'])
+    router.get('/whatsapp/conversations/:contact', [WhatsappPanelController, 'messages'])
+    router.post('/whatsapp/conversations/:contact/send', [WhatsappPanelController, 'send'])
 
     // Etiquetas
     router.get('/tags', [TagsController, 'index'])

@@ -17,6 +17,18 @@ import type { ModelQueryBuilderContract } from '@adonisjs/lucid/types/model'
  * modelo entero, porque `businesses` y `products` guardan también el costo,
  * el dueño y los productos inactivos.
  */
+/**
+ * Un producto se ve en la tienda si no tiene categoría o si al menos una de
+ * sus categorías está activa. Desactivar una categoría oculta sus productos
+ * sin tocar su estado propio: al reactivarla vuelven tal como estaban.
+ */
+const visiblePorCategoria = (q: any) =>
+  q
+    .whereDoesntHave('categoryLinks', (l: any) => l)
+    .orWhereHas('categoryLinks', (l: any) =>
+      l.whereHas('category', (c: any) => c.where('is_active', true))
+    )
+
 export default class StorefrontController {
   private async tiendaPublica(slug: string) {
     return Business.query()
@@ -40,6 +52,8 @@ export default class StorefrontController {
       data: {
         slug: business.slug,
         businessType: business.businessType,
+        paymentPolicy: business.paymentPolicy,
+        paymentInstructions: business.paymentInstructions,
         name: business.name,
         description: business.description,
         logoUrl: business.logoUrl,
@@ -79,11 +93,13 @@ export default class StorefrontController {
     const products = await Product.query()
       .where('business_id', business.id)
       .andWhere('status', 'activo')
+      .where(visiblePorCategoria)
       .preload('businessImages')
       .preload('discounts')
       .preload('tags')
       .preload('defaultVariation')
       .preload('categoryLinks', (l) => l.preload('category'))
+      .orderBy('sort_order', 'asc')
       .orderBy('name', 'asc')
 
     const reglas = await ProductModifierGroup.query()
@@ -117,6 +133,9 @@ export default class StorefrontController {
 
     const categorias = await Category.query()
       .where('business_id', business.id)
+      .andWhere('is_active', true)
+      .preload('subcategories', (s) => s.orderBy('sort_order', 'asc').orderBy('name', 'asc'))
+      .orderBy('sort_order', 'asc')
       .orderBy('name', 'asc')
 
     const platos = products.map((p) => {
@@ -130,6 +149,9 @@ export default class StorefrontController {
         price: precio.final,
         originalPrice: precio.descuento > 0 ? precio.original : null,
         categoryIds: p.categoryLinks.map((l) => l.categoryId),
+        subcategoryIds: p.categoryLinks
+          .map((l) => l.subcategoryId)
+          .filter((id): id is number => id !== null),
         tags: p.tags.map((t) => ({ name: t.name, color: t.color })),
         modifierGroups: gruposPorProducto.get(p.id) ?? [],
       }
@@ -139,7 +161,13 @@ export default class StorefrontController {
       status: 'success',
       data: {
         categories: categorias
-          .map((c) => ({ id: c.id, name: c.name, slug: c.slug, imageUrl: c.imageUrl }))
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            slug: c.slug,
+            imageUrl: c.imageUrl,
+            subcategories: c.subcategories.map((s) => ({ id: s.id, name: s.name })),
+          }))
           .filter((c) => platos.some((p) => p.categoryIds.includes(c.id))),
         products: platos,
       },
@@ -175,6 +203,9 @@ export default class StorefrontController {
         deliveryMethod: order.deliveryMethod,
         tableLabel: order.tableLabel,
         total: Number(order.total),
+        paidTotal: Number(order.paidTotal),
+        paymentPolicy: business.paymentPolicy,
+        paymentInstructions: business.paymentInstructions,
         currencySymbol: business.currencySymbol,
         createdAt: order.createdAt,
         items: order.items.map((i) => ({
@@ -198,7 +229,9 @@ export default class StorefrontController {
 
     const categories = await Category.query()
       .where('business_id', business.id)
-      .preload('subcategories')
+      .andWhere('is_active', true)
+      .preload('subcategories', (s) => s.orderBy('sort_order', 'asc').orderBy('name', 'asc'))
+      .orderBy('sort_order', 'asc')
       .orderBy('name', 'asc')
 
     return {
@@ -312,7 +345,10 @@ export default class StorefrontController {
     request: HttpContext['request'],
     omitir: ('categoria' | 'etiqueta' | 'atributos')[] = []
   ) {
-    const query = Product.query().where('business_id', business.id).andWhere('status', 'activo')
+    const query = Product.query()
+      .where('business_id', business.id)
+      .andWhere('status', 'activo')
+      .where(visiblePorCategoria)
     await this.filtrar(query, business.id, request, omitir)
     const filas = await query.select('id')
     return filas.map((p) => p.id)
@@ -351,7 +387,9 @@ export default class StorefrontController {
         .countDistinct('product_id as total'),
       Category.query()
         .where('business_id', business.id)
-        .preload('subcategories')
+        .andWhere('is_active', true)
+        .preload('subcategories', (s) => s.orderBy('sort_order', 'asc').orderBy('name', 'asc'))
+        .orderBy('sort_order', 'asc')
         .orderBy('name', 'asc'),
     ])
     const totCat = new Map(porCategoria.map((r: any) => [r.category_id, Number(r.total)]))
@@ -436,6 +474,7 @@ export default class StorefrontController {
     const query = Product.query()
       .where('business_id', business.id)
       .andWhere('status', 'activo')
+      .where(visiblePorCategoria)
       .preload('businessImages')
       .preload('discounts')
       .preload('tags')
@@ -497,6 +536,7 @@ export default class StorefrontController {
       const filas = await Product.query()
         .where('business_id', business.id)
         .andWhere('status', 'activo')
+        .where(visiblePorCategoria)
         .whereNotIn('id', excluir)
         .whereHas('categoryLinks', (l) => l.whereIn(columna, ids))
         .preload('businessImages')
@@ -531,6 +571,7 @@ export default class StorefrontController {
       .where('business_id', business.id)
       .andWhere('slug', params.productSlug)
       .andWhere('status', 'activo')
+      .where(visiblePorCategoria)
       .preload('businessImages')
       .preload('discounts')
       .preload('tags')

@@ -25,6 +25,9 @@ export default class Subcategory extends BaseModel {
   @column()
   declare description: string | null
 
+  @column()
+  declare sortOrder: number
+
   @belongsTo(() => Category)
   declare category: BelongsTo<typeof Category>
 

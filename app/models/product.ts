@@ -27,6 +27,9 @@ export default class Product extends BaseModel {
   declare description: string | null
 
   @column()
+  declare sortOrder: number
+
+  @column()
   declare price: number
 
   /** Precio de costo. Sin esto no hay margen que reportar. */

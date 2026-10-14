@@ -23,6 +23,12 @@ export default class Category extends BaseModel {
   @column()
   declare description: string | null
 
+  @column()
+  declare sortOrder: number
+
+  @column()
+  declare isActive: boolean
+
   @belongsTo(() => Business)
   declare business: BelongsTo<typeof Business>
 

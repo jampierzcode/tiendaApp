@@ -1,4 +1,5 @@
 import Order from '#models/order'
+import WhatsappMessage from '#models/whatsapp_message'
 import WhatsappOutbox from '#models/whatsapp_outbox'
 import WhatsappSession from '#models/whatsapp_session'
 import NotificationService, { EVENTOS } from '#services/notification_service'
@@ -60,6 +61,110 @@ export class WhatsappPanelController {
     sesion.merge({ desired: 'disconnected', status: 'disconnected', qr: null })
     await sesion.save()
     return { status: 'success', message: 'Desconectando…' }
+  }
+
+  /** Conversaciones: una por cliente, con el último mensaje y lo no leído. */
+  public async conversations({ business }: HttpContext) {
+    const filas = await db
+      .from('whatsapp_messages')
+      .where('business_id', business.id)
+      .groupBy('contact')
+      .select('contact')
+      .max('id as lastId')
+      .count('* as total')
+      .select(db.raw("sum(case when direction = 'in' and read_at is null then 1 else 0 end) as unread"))
+      .orderBy('lastId', 'desc')
+      .limit(100)
+
+    const ultimos = await WhatsappMessage.query().whereIn(
+      'id',
+      filas.map((f) => f.lastId)
+    )
+    const porId = new Map(ultimos.map((m) => [m.id, m]))
+
+    // Nombre del cliente: el del pedido más reciente con ese teléfono.
+    const pedidos = await Order.query()
+      .where('business_id', business.id)
+      .orderBy('id', 'desc')
+      .limit(500)
+    const nombre = new Map<string, string>()
+    for (const o of pedidos) {
+      const k = (o.customerPhone ?? '').replace(/\D/g, '').slice(-9)
+      if (k && !nombre.has(k)) nombre.set(k, o.customerName)
+    }
+
+    return {
+      status: 'success',
+      data: filas.map((f) => {
+        const u = porId.get(f.lastId)
+        return {
+          contact: f.contact,
+          phone: u?.phone ?? f.contact,
+          name: nombre.get(f.contact) ?? null,
+          lastMessage: u?.body ?? '',
+          lastDirection: u?.direction ?? 'in',
+          lastAt: u?.createdAt,
+          unread: Number(f.unread ?? 0),
+        }
+      }),
+    }
+  }
+
+  /** Mensajes de una conversación; al abrirla quedan como leídos. */
+  public async messages({ business, params }: HttpContext) {
+    const mensajes = await WhatsappMessage.query()
+      .where('business_id', business.id)
+      .andWhere('contact', params.contact)
+      .orderBy('id', 'desc')
+      .limit(200)
+
+    await WhatsappMessage.query()
+      .where('business_id', business.id)
+      .andWhere('contact', params.contact)
+      .andWhere('direction', 'in')
+      .whereNull('read_at')
+      .update({ read_at: DateTime.now().toSQL() })
+
+    return { status: 'success', data: mensajes.reverse() }
+  }
+
+  public async send({ business, params, request, response }: HttpContext) {
+    const texto = String(request.input('text') ?? '').trim().slice(0, 1000)
+    if (!texto) return response.badRequest({ status: 'error', message: 'Escribe un mensaje' })
+
+    const ultimo = await WhatsappMessage.query()
+      .where('business_id', business.id)
+      .andWhere('contact', params.contact)
+      .orderBy('id', 'desc')
+      .first()
+    // Sin historial aún (p. ej. desde un pedido): se usa el teléfono del pedido.
+    const destino = ultimo?.phone ?? String(request.input('phone') ?? '').replace(/\D/g, '')
+    if (!destino) return response.notFound({ status: 'error', message: 'Conversación no encontrada' })
+
+    const sesion = await WhatsappSession.query().where('business_id', business.id).first()
+    if (!sesion || sesion.desired !== 'connected') {
+      return response.badRequest({ status: 'error', message: 'Conecta el WhatsApp del negocio primero' })
+    }
+
+    await NotificationService.encolar(business, {
+      phone: destino,
+      event: 'chat',
+      body: texto,
+      automatic: false,
+    })
+    return { status: 'success', message: 'Enviando…' }
+  }
+
+  /** Total de mensajes sin leer: alimenta el globito y las notificaciones. */
+  public async unread({ business }: HttpContext) {
+    const fila = await db
+      .from('whatsapp_messages')
+      .where('business_id', business.id)
+      .andWhere('direction', 'in')
+      .whereNull('read_at')
+      .count('* as total')
+      .first()
+    return { status: 'success', data: { unread: Number(fila?.total ?? 0) } }
   }
 
   public async saveTemplates({ business, request }: HttpContext) {
@@ -210,6 +315,18 @@ export default class WhatsappBotController {
    * el bot debe callar (no inventa conversación con quien no la inició).
    */
   public async inbound(ctx: HttpContext) {
+    const salida: any = await this.inboundInterno(ctx)
+    if (salida?.reply) {
+      const { businessUuid, phone } = ctx.request.only(['businessUuid', 'phone'])
+      const negocio = await Business.findBy('uuid', businessUuid)
+      if (negocio) {
+        await NotificationService.registrar(negocio.id, String(phone ?? ''), 'out', salida.reply, true)
+      }
+    }
+    return salida
+  }
+
+  private async inboundInterno(ctx: HttpContext) {
     if (!this.autorizado(ctx)) return
     const { request, response } = ctx
 
@@ -217,8 +334,12 @@ export default class WhatsappBotController {
     const business = await Business.findBy('uuid', businessUuid)
     if (!business) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
 
-    const mensaje = String(text ?? '')
-      .trim()
+    const crudo = String(text ?? '').trim()
+    if (crudo) {
+      await NotificationService.registrar(business.id, String(phone ?? ''), 'in', crudo.slice(0, 2000), false)
+    }
+
+    const mensaje = crudo
       .toLowerCase()
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '')

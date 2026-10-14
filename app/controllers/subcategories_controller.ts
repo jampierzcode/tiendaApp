@@ -1,6 +1,7 @@
 import Category from '#models/category'
 import Subcategory from '#models/subcategory'
 import SlugService from '#services/slug_service'
+import db from '@adonisjs/lucid/services/db'
 import type { HttpContext } from '@adonisjs/core/http'
 
 export default class SubcategoriesController {
@@ -10,6 +11,7 @@ export default class SubcategoriesController {
     const query = Subcategory.query()
       .where('business_id', business.id)
       .preload('category')
+      .orderBy('sort_order', 'asc')
       .orderBy('name', 'asc')
 
     if (categoryId) {
@@ -17,6 +19,25 @@ export default class SubcategoriesController {
     }
 
     return { status: 'success', data: await query }
+  }
+
+
+  /** Guarda el orden manual: el primer id queda primero. */
+  public async reorder({ business, request, response }: HttpContext) {
+    const ids: number[] = (request.input('ids') ?? []).map(Number).filter(Boolean)
+    if (!ids.length) {
+      return response.unprocessableEntity({ status: 'error', message: 'No hay nada que ordenar' })
+    }
+    await db.transaction(async (trx) => {
+      for (const [i, id] of ids.entries()) {
+        await trx
+          .from('subcategories')
+          .where('business_id', business.id)
+          .andWhere('id', id)
+          .update({ sort_order: i + 1 })
+      }
+    })
+    return { status: 'success', message: 'Orden guardado' }
   }
 
   public async show({ params, business }: HttpContext) {

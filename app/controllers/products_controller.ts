@@ -91,6 +91,7 @@ export default class ProductsController {
     const search = request.input('search')
     const status = request.input('status')
     const categoryId = request.input('categoryId')
+    const subcategoryId = request.input('subcategoryId')
 
     const query = Product.query()
       .where('business_id', business.id)
@@ -104,6 +105,14 @@ export default class ProductsController {
       })
       .orderBy('id', 'desc')
 
+    // Orden pedido por el panel: alfabético o el manual (arrastrado).
+    const orden = request.input('sort')
+    if (orden === 'name_asc' || orden === 'name_desc') {
+      query.clearOrder().orderBy('name', orden === 'name_asc' ? 'asc' : 'desc')
+    } else if (orden === 'manual') {
+      query.clearOrder().orderBy('sort_order', 'asc').orderBy('name', 'asc')
+    }
+
     if (search) {
       query.where((sub) => {
         sub.whereILike('name', `%${search}%`).orWhereILike('sku', `%${search}%`)
@@ -114,8 +123,14 @@ export default class ProductsController {
       query.where('status', status)
     }
 
-    if (categoryId) {
+    if (categoryId === 'none') {
+      query.whereDoesntHave('categoryLinks', (link) => link)
+    } else if (categoryId) {
       query.whereHas('categoryLinks', (link) => link.where('category_id', categoryId))
+    }
+
+    if (subcategoryId) {
+      query.whereHas('categoryLinks', (link) => link.where('subcategory_id', subcategoryId))
     }
 
     // El panel pagina (con 2.500 productos no se puede mandar todo). Las
@@ -134,6 +149,24 @@ export default class ProductsController {
     const products = await query
 
     return { status: 'success', data: products }
+  }
+
+  /** Guarda el orden manual de los platos: el primer id queda primero. */
+  public async reorder({ business, request, response }: HttpContext) {
+    const ids: number[] = (request.input('ids') ?? []).map(Number).filter(Boolean)
+    if (!ids.length) {
+      return response.unprocessableEntity({ status: 'error', message: 'No hay nada que ordenar' })
+    }
+    await db.transaction(async (trx) => {
+      for (const [i, id] of ids.entries()) {
+        await trx
+          .from('products')
+          .where('business_id', business.id)
+          .andWhere('id', id)
+          .update({ sort_order: i + 1 })
+      }
+    })
+    return { status: 'success', message: 'Orden guardado' }
   }
 
   public async show({ params, business }: HttpContext) {

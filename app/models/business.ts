@@ -103,6 +103,14 @@ export default class Business extends BaseModel {
   @column()
   declare businessType: 'retail' | 'restaurant'
 
+  /** Cuándo se exige cobrar: 'none' | 'on_confirm' (adelantado) | 'on_delivery' (contra entrega). */
+  @column()
+  declare paymentPolicy: 'none' | 'on_confirm' | 'on_delivery'
+
+  /** Texto libre para el cliente: a qué Yape o cuenta pagar. */
+  @column()
+  declare paymentInstructions: string | null
+
   /** JSON con plantillas de WhatsApp por evento; null usa las de fábrica. */
   @column()
   declare notificationTemplates: string | null

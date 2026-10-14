@@ -18,7 +18,7 @@ export default class OrdersController {
     pagado: ['preparando', 'enviado', 'cancelado'],
     preparando: ['listo', 'cancelado'],
     listo: ['enviado', 'entregado', 'cancelado'],
-    enviado: ['entregado', 'devuelto'],
+    enviado: ['entregado', 'devuelto', 'cancelado'],
     entregado: ['devuelto'],
     cancelado: [],
     devuelto: [],
@@ -122,6 +122,23 @@ export default class OrdersController {
         message: permitidos.length
           ? `Un pedido ${order.status} solo puede pasar a: ${permitidos.join(', ')}`
           : `Un pedido ${order.status} ya no cambia de estado`,
+      })
+    }
+
+    // Política de cobro: pago por adelantado (al confirmar) o contra entrega
+    // (al entregar). Se puede saltar a propósito con allowUnpaid.
+    const exige =
+      (business.paymentPolicy === 'on_confirm' && nuevo === 'confirmado') ||
+      (business.paymentPolicy === 'on_delivery' && nuevo === 'entregado')
+    if (exige && order.saldoPendiente > 0.009 && request.input('allowUnpaid') !== true) {
+      return response.status(422).send({
+        status: 'error',
+        code: 'PAYMENT_REQUIRED',
+        message:
+          business.paymentPolicy === 'on_confirm'
+            ? 'Este negocio cobra por adelantado: registra el pago antes de confirmar.'
+            : 'Este negocio cobra contra entrega: registra el pago al entregar.',
+        data: { saldo: order.saldoPendiente, total: Number(order.total) },
       })
     }
 
