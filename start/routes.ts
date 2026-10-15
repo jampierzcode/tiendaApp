@@ -49,6 +49,7 @@ import ReportsController from '#controllers/reports_controller'
 import ModifierGroupsController from '#controllers/modifier_groups_controller'
 import IngredientsController from '#controllers/ingredients_controller'
 import RecipesController from '#controllers/recipes_controller'
+import SubscriptionsController from '#controllers/subscriptions_controller'
 import WhatsappBotController, { WhatsappPanelController } from '#controllers/whatsapp_controller'
 
 router.get('/', async () => ({ hello: 'world' }))
@@ -66,6 +67,10 @@ router.get('/media/*', [MediaController, 'show']).as('media.show')
 */
 router.post('/api/login', [AuthController, 'login']).as('auth.login')
 router.post('/api/register', [AuthController, 'register']).as('auth.register')
+
+// Suscripción con wizard: plantillas por rubro y alta de dueño + negocio (7 días gratis).
+router.get('/api/subscribe/templates', [SubscriptionsController, 'templates'])
+router.post('/api/subscribe', [SubscriptionsController, 'subscribe']).as('subscribe')
 
 /*
 | 1b. Tienda pública — SIN token
@@ -120,6 +125,8 @@ router
     router.get('/businesses/byUser', [BusinessesController, 'getByUser']).as('business.byUser')
     router.get('/businesses/byUuid/:uuid', [BusinessesController, 'getByUuid']).as('business.byUuid')
     router.post('/businesses', [BusinessesController, 'store']).as('business.store')
+    // Otro negocio para la misma cuenta, con wizard y prueba gratis.
+    router.post('/account/businesses', [SubscriptionsController, 'addBusiness'])
     router.get('/businesses/:id', [BusinessesController, 'show']).as('business.show')
     router.put('/businesses/:id', [BusinessesController, 'update']).as('business.update')
   })

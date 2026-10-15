@@ -1,4 +1,5 @@
-import { BaseModel, column, hasMany, belongsTo, beforeCreate } from '@adonisjs/lucid/orm'
+import { BaseModel, column, computed, hasMany, belongsTo, beforeCreate } from '@adonisjs/lucid/orm'
+import { DateTime } from 'luxon'
 import Product from './product.js'
 import User from './user.js'
 import BusinessImage from './business_image.js'
@@ -115,6 +116,19 @@ export default class Business extends BaseModel {
   @column()
   declare notificationTemplates: string | null
 
+  // --- Suscripción ---
+
+  /** 'trial' (prueba gratis), 'active' (pagando) o 'expired'. */
+  @column()
+  declare subscriptionStatus: 'trial' | 'active' | 'expired'
+
+  @column.dateTime()
+  declare trialEndsAt: DateTime | null
+
+  /** polleria, cafeteria, comida_rapida, ropa, repuestos… Solo informativo. */
+  @column()
+  declare businessSubtype: string | null
+
   @column({ columnName: 'user_id' })
   declare userId: number
 
@@ -153,8 +167,31 @@ export default class Business extends BaseModel {
     return !this.esRestaurante
   }
 
+  /** La prueba gratis ya venció y nadie activó el plan. */
+  @computed()
+  get trialExpired() {
+    return (
+      this.subscriptionStatus === 'expired' ||
+      (this.subscriptionStatus === 'trial' &&
+        this.trialEndsAt !== null &&
+        this.trialEndsAt < DateTime.now())
+    )
+  }
+
+  /** Días que le quedan a la prueba; null si no está en prueba. */
+  @computed()
+  get trialDaysLeft() {
+    if (this.subscriptionStatus !== 'trial' || !this.trialEndsAt) return null
+    return Math.max(0, Math.ceil(this.trialEndsAt.diffNow('days').days))
+  }
+
   /** ¿Está lista para recibir pedidos? */
   get puedeVender() {
-    return this.isPublic && this.status === 'activo' && Boolean(this.whatsappPhone)
+    return (
+      this.isPublic &&
+      this.status === 'activo' &&
+      !this.trialExpired &&
+      Boolean(this.whatsappPhone)
+    )
   }
 }

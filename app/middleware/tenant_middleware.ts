@@ -62,6 +62,19 @@ export default class TenantMiddleware {
       })
     }
 
+    // Prueba vencida: se puede mirar el panel, pero no operar hasta activar.
+    if (
+      !isSuperAdmin &&
+      business.trialExpired &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(ctx.request.method())
+    ) {
+      return ctx.response.status(402).send({
+        status: 'error',
+        code: 'trial_expired',
+        message: 'Tu prueba gratis terminó. Activa tu plan para seguir operando.',
+      })
+    }
+
     ctx.business = business
 
     return next()
