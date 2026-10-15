@@ -188,6 +188,67 @@ export const CATALOG_TEMPLATES: CatalogTemplate[] = [
     ],
   },
   {
+    key: 'jugueria',
+    businessType: 'restaurant',
+    label: 'Juguería',
+    description: 'Jugos, batidos, ensaladas de fruta y sándwiches.',
+    categories: [
+      {
+        name: 'Jugos',
+        products: [
+          { name: 'Jugo de Naranja', price: 7 },
+          { name: 'Jugo de Papaya', price: 8 },
+          { name: 'Jugo Surtido', price: 9 },
+          { name: 'Jugo de Fresa', price: 9 },
+          { name: 'Jugo de Mango', price: 9 },
+        ],
+      },
+      {
+        name: 'Batidos',
+        products: [
+          { name: 'Batido de Fresa con Leche', price: 10 },
+          { name: 'Batido de Plátano con Leche', price: 9 },
+          { name: 'Batido de Lúcuma', price: 11 },
+        ],
+      },
+      {
+        name: 'Ensaladas de fruta',
+        products: [
+          { name: 'Ensalada de Frutas', price: 10 },
+          { name: 'Ensalada de Frutas con Yogurt y Granola', price: 13 },
+        ],
+      },
+      {
+        name: 'Para comer',
+        products: [
+          { name: 'Pan con Pollo', price: 8 },
+          { name: 'Pan con Chicharrón', price: 10 },
+          { name: 'Pan con Tortilla', price: 6 },
+        ],
+      },
+    ],
+    modifierGroups: [
+      {
+        name: 'Tamaño',
+        appliesTo: ['Jugos', 'Batidos'],
+        minSelect: 1,
+        maxSelect: 1,
+        options: [{ name: 'Vaso' }, { name: 'Jarra', priceDelta: 6 }],
+      },
+      {
+        name: 'Endulzante',
+        appliesTo: ['Jugos', 'Batidos'],
+        maxSelect: 1,
+        options: [{ name: 'Azúcar' }, { name: 'Miel', priceDelta: 1 }, { name: 'Sin azúcar' }],
+      },
+      {
+        name: 'Extras',
+        appliesTo: ['Batidos', 'Ensaladas de fruta'],
+        options: [{ name: 'Granola', priceDelta: 2 }, { name: 'Quinua', priceDelta: 2 }, { name: 'Helado', priceDelta: 3 }],
+      },
+    ],
+  },
+  {
     key: 'ropa',
     businessType: 'retail',
     label: 'Tienda de ropa',
