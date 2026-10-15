@@ -62,16 +62,16 @@ export default class TenantMiddleware {
       })
     }
 
-    // Prueba vencida: se puede mirar el panel, pero no operar hasta activar.
+    // Suscripción vencida (prueba o pago): se puede mirar el panel, pero no operar hasta activar.
     if (
       !isSuperAdmin &&
-      business.trialExpired &&
+      business.subscriptionExpired &&
       !['GET', 'HEAD', 'OPTIONS'].includes(ctx.request.method())
     ) {
       return ctx.response.status(402).send({
         status: 'error',
-        code: 'trial_expired',
-        message: 'Tu prueba gratis terminó. Activa tu plan para seguir operando.',
+        code: 'subscription_expired',
+        message: 'Tu suscripción está vencida. Activa tu plan para seguir operando.',
       })
     }
 

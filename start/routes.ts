@@ -141,6 +141,7 @@ router
     router.get('/businesses', [BusinessesController, 'index']).as('business.index')
     router.delete('/businesses/:id', [BusinessesController, 'destroy']).as('business.destroy')
     router.post('/businesses/:id/clone-catalog', [BusinessesController, 'cloneCatalog'])
+    router.put('/businesses/:id/subscription', [BusinessesController, 'updateSubscription'])
 
     router.get('/users/admins', [UsersController, 'admins'])
     router.get('/users', [UsersController, 'index']).as('users.index')

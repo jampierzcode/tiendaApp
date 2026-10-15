@@ -125,6 +125,14 @@ export default class Business extends BaseModel {
   @column.dateTime()
   declare trialEndsAt: DateTime | null
 
+  /** Plan contratado (texto libre del superadmin: "Mensual", "Anual"…). */
+  @column()
+  declare plan: string | null
+
+  /** Hasta cuándo está pagado. Null = sin vencimiento. */
+  @column.dateTime()
+  declare paidUntil: DateTime | null
+
   /** polleria, cafeteria, comida_rapida, ropa, repuestos… Solo informativo. */
   @column()
   declare businessSubtype: string | null
@@ -167,15 +175,23 @@ export default class Business extends BaseModel {
     return !this.esRestaurante
   }
 
-  /** La prueba gratis ya venció y nadie activó el plan. */
+  /**
+   * Estado real hoy: el guardado en BD puede estar desfasado respecto al
+   * calendario (una prueba o un pago vencen solos, sin que nadie edite la fila).
+   */
   @computed()
-  get trialExpired() {
-    return (
-      this.subscriptionStatus === 'expired' ||
-      (this.subscriptionStatus === 'trial' &&
-        this.trialEndsAt !== null &&
-        this.trialEndsAt < DateTime.now())
-    )
+  get effectiveSubscriptionStatus(): 'trial' | 'active' | 'expired' {
+    if (this.subscriptionStatus === 'expired') return 'expired'
+    const now = DateTime.now()
+    if (this.subscriptionStatus === 'trial') {
+      return this.trialEndsAt && this.trialEndsAt < now ? 'expired' : 'trial'
+    }
+    return this.paidUntil && this.paidUntil < now ? 'expired' : 'active'
+  }
+
+  /** Sin plan vigente: el panel queda en solo lectura y la tienda no vende. */
+  get subscriptionExpired() {
+    return this.effectiveSubscriptionStatus === 'expired'
   }
 
   /** Días que le quedan a la prueba; null si no está en prueba. */
@@ -185,12 +201,20 @@ export default class Business extends BaseModel {
     return Math.max(0, Math.ceil(this.trialEndsAt.diffNow('days').days))
   }
 
+  /** Días hasta el vencimiento (de la prueba o del pago); null si no vence. */
+  @computed()
+  get subscriptionDaysLeft() {
+    const fin = this.subscriptionStatus === 'trial' ? this.trialEndsAt : this.paidUntil
+    if (!fin) return null
+    return Math.ceil(fin.diffNow('days').days)
+  }
+
   /** ¿Está lista para recibir pedidos? */
   get puedeVender() {
     return (
       this.isPublic &&
       this.status === 'activo' &&
-      !this.trialExpired &&
+      !this.subscriptionExpired &&
       Boolean(this.whatsappPhone)
     )
   }
