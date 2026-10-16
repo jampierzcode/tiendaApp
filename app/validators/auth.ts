@@ -34,6 +34,13 @@ export const createUserValidator = vine.compile(
   })
 )
 
+/** Restablecimiento por el superadmin; sin contraseña se genera una temporal. */
+export const resetPasswordValidator = vine.compile(
+  vine.object({
+    password: vine.string().minLength(8).optional(),
+  })
+)
+
 export const loginValidator = vine.compile(
   vine.object({
     email: vine.string().email().normalizeEmail(),

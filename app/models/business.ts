@@ -133,7 +133,7 @@ export default class Business extends BaseModel {
   @column.dateTime()
   declare paidUntil: DateTime | null
 
-  /** polleria, cafeteria, comida_rapida, ropa, repuestos… Solo informativo. */
+  /** polleria, cafeteria, cevicheria, comida_rapida, ropa, repuestos… Solo informativo. */
   @column()
   declare businessSubtype: string | null
 

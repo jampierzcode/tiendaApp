@@ -188,6 +188,66 @@ export const CATALOG_TEMPLATES: CatalogTemplate[] = [
     ],
   },
   {
+    key: 'cevicheria',
+    businessType: 'restaurant',
+    label: 'Cevichería',
+    description: 'Ceviches, tiraditos, chicharrones, arroces de mar y bebidas.',
+    categories: [
+      {
+        name: 'Ceviches',
+        products: [
+          { name: 'Ceviche Clásico', price: 32 },
+          { name: 'Ceviche Mixto', price: 38 },
+          { name: 'Ceviche de Conchas Negras', price: 45 },
+          { name: 'Leche de Tigre', price: 16 },
+        ],
+      },
+      {
+        name: 'Tiraditos y entradas',
+        products: [
+          { name: 'Tiradito al Ají Amarillo', price: 34 },
+          { name: 'Causa de Pescado', price: 18 },
+          { name: 'Choritos a la Chalaca', price: 24 },
+        ],
+      },
+      {
+        name: 'Fritos y marinos',
+        products: [
+          { name: 'Chicharrón de Pescado', price: 30 },
+          { name: 'Jalea Mixta', price: 48 },
+          { name: 'Arroz con Mariscos', price: 36 },
+          { name: 'Chaufa de Mariscos', price: 34 },
+        ],
+      },
+      {
+        name: 'Bebidas',
+        products: [
+          { name: 'Chicha Morada (jarra 1L)', price: 18 },
+          { name: 'Limonada Clásica', price: 8 },
+          { name: 'Inca Kola 500ml', price: 5 },
+          { name: 'Cerveza Pilsen 620ml', price: 12 },
+        ],
+      },
+    ],
+    modifierGroups: [
+      {
+        name: 'Nivel de ají',
+        appliesTo: ['Ceviches', 'Tiraditos y entradas'],
+        maxSelect: 1,
+        options: [{ name: 'Sin ají' }, { name: 'Normal' }, { name: 'Picante' }],
+      },
+      {
+        name: 'Extras',
+        appliesTo: ['Ceviches', 'Fritos y marinos'],
+        options: [
+          { name: 'Porción de cancha', priceDelta: 3 },
+          { name: 'Camote sancochado', priceDelta: 4 },
+          { name: 'Yuca frita', priceDelta: 6 },
+        ],
+      },
+    ],
+  },
+  {
     key: 'jugueria',
     businessType: 'restaurant',
     label: 'Juguería',

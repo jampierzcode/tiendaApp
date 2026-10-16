@@ -148,6 +148,7 @@ router
     router.get('/users/:id', [UsersController, 'show']).as('users.show')
     router.post('/users', [UsersController, 'store']).as('users.store')
     router.put('/users/:id', [UsersController, 'update']).as('users.update')
+    router.post('/users/:id/reset-password', [UsersController, 'resetPassword'])
     router.delete('/users/:id', [UsersController, 'destroy']).as('users.destroy')
 
     router.get('/roles', [RolesController, 'index']).as('roles.index')

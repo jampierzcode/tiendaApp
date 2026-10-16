@@ -1,8 +1,8 @@
 import Business from '#models/business'
 import Role from '#models/role'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import User from '#models/user'
-import { createUserValidator } from '#validators/auth'
+import { createUserValidator, resetPasswordValidator } from '#validators/auth'
 import type { HttpContext } from '@adonisjs/core/http'
 
 /**
@@ -118,6 +118,31 @@ export default class UsersController {
     }
 
     return { status: 'success', message: 'Usuario actualizado', data: user }
+  }
+
+  /**
+   * Restablece la contraseña de cualquier usuario. Si no se envía una, se
+   * genera una temporal y se devuelve una sola vez para que el superadmin
+   * se la entregue al usuario. Se cierran sus sesiones activas.
+   */
+  public async resetPassword({ params, request }: HttpContext) {
+    const user = await User.findOrFail(params.id)
+    const { password } = await request.validateUsing(resetPasswordValidator)
+
+    const newPassword = password ?? randomBytes(9).toString('base64url')
+
+    // El hook del modelo se encarga de hashearla.
+    user.password = newPassword
+    await user.save()
+
+    const tokens = await User.accessTokens.all(user)
+    await Promise.all(tokens.map((token) => User.accessTokens.delete(user, token.identifier)))
+
+    return {
+      status: 'success',
+      message: 'Contraseña restablecida',
+      data: { password: newPassword },
+    }
   }
 
   public async destroy({ params, auth, response }: HttpContext) {
