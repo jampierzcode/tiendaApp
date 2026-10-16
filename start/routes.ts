@@ -276,6 +276,7 @@ router
 
     // Pagos del pedido
     router.get('/orders/:orderId/payments', [PaymentsController, 'index'])
+    router.post('/payments/receipt', [PaymentsController, 'uploadReceipt'])
     router.post('/orders/:orderId/payments', [PaymentsController, 'store'])
     router.delete('/payments/:id', [PaymentsController, 'destroy'])
 

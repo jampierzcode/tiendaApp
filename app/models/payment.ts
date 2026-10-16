@@ -5,6 +5,7 @@ import Business from '#models/business'
 import BusinessImage from '#models/business_image'
 import Order from '#models/order'
 import User from '#models/user'
+import StorageService from '#services/storage_service'
 
 export type MetodoPago = 'efectivo' | 'yape' | 'plin' | 'transferencia' | 'tarjeta' | 'otro'
 
@@ -35,6 +36,17 @@ export default class Payment extends BaseModel {
 
   @column()
   declare receiptImageId: number | null
+
+  /** Comprobante subido directo al bucket, sin pasar por la galería. */
+  @column({
+    consume: (url) => StorageService.urlAbsoluta(url),
+    serialize: (url) => StorageService.urlAbsoluta(url),
+    prepare: (url) => StorageService.urlRelativa(url),
+  })
+  declare receiptUrl: string | null
+
+  @column()
+  declare receiptKey: string | null
 
   @column()
   declare note: string | null

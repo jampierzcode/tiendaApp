@@ -1,6 +1,7 @@
 import Order from '#models/order'
 import Payment, { type MetodoPago } from '#models/payment'
 import PricingService from '#services/pricing_service'
+import StorageService from '#services/storage_service'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
 
@@ -13,6 +14,8 @@ interface EntradaPago {
   amount: number
   reference?: string | null
   receiptImageId?: number | null
+  receiptUrl?: string | null
+  receiptKey?: string | null
   note?: string | null
   paidAt?: DateTime
   userId?: number | null
@@ -62,6 +65,8 @@ export default class PaymentService {
           amount: monto,
           reference: entrada.reference ?? null,
           receiptImageId: entrada.receiptImageId ?? null,
+          receiptUrl: entrada.receiptUrl ?? null,
+          receiptKey: entrada.receiptKey ?? null,
           note: entrada.note ?? null,
           paidAt: entrada.paidAt ?? DateTime.now(),
           userId: entrada.userId ?? null,
@@ -92,8 +97,15 @@ export default class PaymentService {
         .forUpdate()
         .firstOrFail()
 
+      const keyComprobante = payment.receiptKey
+
       await payment.useTransaction(trx).delete()
       await this.refrescarTotal(order, trx)
+
+      // Mejor esfuerzo: si el bucket falla, el cobro ya quedó anulado.
+      if (keyComprobante) {
+        StorageService.eliminar(keyComprobante).catch(() => undefined)
+      }
 
       return order
     })
