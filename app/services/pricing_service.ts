@@ -1,54 +1,17 @@
-import type Discount from '#models/discount'
-import { DateTime } from 'luxon'
-
-export interface PrecioCalculado {
-  /** Precio de lista, sin descuento. */
-  original: number
-  /** Lo que paga el cliente. */
-  final: number
-  /** Porcentaje aplicado, 0 si no hay descuento vigente. */
-  descuento: number
-  /** Cuánto se ahorra. */
-  ahorro: number
-}
-
-/**
- * Aplica los descuentos vigentes al precio.
- *
- * La tabla `discounts` existía desde el principio pero nadie la usaba: el
- * precio que veía el cliente era siempre el de lista. Aquí es donde el
- * descuento por fin llega al bolsillo.
- */
+/** Precios y redondeos de dinero. Las promociones viven en PromotionService. */
 export default class PricingService {
-  /** El descuento vigente hoy, o el mayor si hay varios solapados. */
-  static descuentoVigente(discounts: Discount[] = [], fecha = DateTime.now()): number {
-    const hoy = fecha.startOf('day')
-
-    const vigentes = discounts.filter((d) => {
-      const inicio = d.startDate?.startOf('day')
-      const fin = d.endDate?.endOf('day')
-      if (!inicio || !fin) return false
-      return hoy >= inicio && hoy <= fin
-    })
-
-    if (!vigentes.length) return 0
-
-    // Si el negocio dejó dos promociones solapadas, gana la mejor para el
-    // cliente: es lo que espera quien ve el cartel más llamativo.
-    return Math.max(...vigentes.map((d) => Number(d.percentage)))
-  }
-
-  static calcular(precioBase: number, discounts: Discount[] = [], fecha?: DateTime): PrecioCalculado {
-    const original = Number(precioBase)
-    const descuento = this.descuentoVigente(discounts, fecha)
-    const final = this.redondear(original * (1 - descuento / 100))
-
-    return {
-      original: this.redondear(original),
-      final,
-      descuento,
-      ahorro: this.redondear(original - final),
+  /**
+   * Precio sugerido para un costo nuevo. Mantiene el margen que ya tenía el
+   * producto (sobre el precio); si no hay dato, usa 40 %. Sube al múltiplo de
+   * S/ 0.10 para no sugerir precios con céntimos raros. Solo sugiere.
+   */
+  static sugerirPrecio(costoNuevo: number, precioActual: number, costoAnterior?: number | null) {
+    let margen = 0.4
+    if (precioActual > 0 && costoAnterior && costoAnterior > 0 && costoAnterior < precioActual) {
+      margen = Math.min(0.9, Math.max(0.05, (precioActual - costoAnterior) / precioActual))
     }
+    const bruto = costoNuevo / (1 - margen)
+    return { precio: Math.ceil(bruto * 10 - 1e-9) / 10, margen: Math.round(margen * 1000) / 10 }
   }
 
   /** Céntimos exactos: evita los 39.900000000000006 de coma flotante. */

@@ -90,6 +90,7 @@ export default class PosController {
         customerName: request.input('customerName'),
         customerPhone: request.input('customerPhone'),
         discountPercentage: Number(request.input('discountPercentage', 0)),
+        couponCode: request.input('couponCode') ?? null,
         note: request.input('note'),
         userId: auth.user!.id,
       })

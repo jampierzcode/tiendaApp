@@ -5,12 +5,30 @@ import type { HttpContext } from '@adonisjs/core/http'
 
 export default class TagsController {
   public async index({ business }: HttpContext) {
-    const tags = await Tag.query().where('business_id', business.id).orderBy('name', 'asc')
-    return { status: 'success', data: tags }
+    const tags = await Tag.query()
+      .where('business_id', business.id)
+      .withCount('products')
+      .orderBy('name', 'asc')
+
+    return {
+      status: 'success',
+      data: tags.map((t) => ({ ...t.serialize(), productsCount: Number(t.$extras.products_count ?? 0) })),
+    }
   }
 
-  public async store({ request, business }: HttpContext) {
+  public async store({ request, business, response }: HttpContext) {
     const data = request.only(['name', 'color'])
+    if (!data.name || String(data.name).trim().length < 2) {
+      return response.unprocessableEntity({ status: 'error', message: 'Escribe el nombre de la etiqueta' })
+    }
+    data.name = String(data.name).trim()
+    const repetida = await Tag.query()
+      .where('business_id', business.id)
+      .whereRaw('lower(name) = ?', [data.name.toLowerCase()])
+      .first()
+    if (repetida) {
+      return response.unprocessableEntity({ status: 'error', message: 'Ya tienes una etiqueta con ese nombre' })
+    }
     const slug = await SlugService.uniqueFor('tags', business.id, data.name)
 
     const tag = await Tag.create({
@@ -23,7 +41,7 @@ export default class TagsController {
     return { status: 'success', message: 'Etiqueta creada', data: tag }
   }
 
-  public async update({ params, request, business }: HttpContext) {
+  public async update({ params, request, business, response }: HttpContext) {
     const tag = await Tag.query()
       .where('id', params.id)
       .andWhere('business_id', business.id)
@@ -32,6 +50,14 @@ export default class TagsController {
     const data = request.only(['name', 'color'])
 
     if (data.name && data.name !== tag.name) {
+      const repetida = await Tag.query()
+        .where('business_id', business.id)
+        .whereNot('id', tag.id)
+        .whereRaw('lower(name) = ?', [String(data.name).trim().toLowerCase()])
+        .first()
+      if (repetida) {
+        return response.unprocessableEntity({ status: 'error', message: 'Ya tienes una etiqueta con ese nombre' })
+      }
       tag.slug = await SlugService.uniqueFor('tags', business.id, data.name, tag.id)
     }
 

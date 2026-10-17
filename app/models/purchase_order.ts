@@ -6,7 +6,12 @@ import PurchaseOrderItem from '#models/purchase_order_item'
 import Supplier from '#models/supplier'
 import User from '#models/user'
 
-export type EstadoCompra = 'borrador' | 'recibida' | 'cancelada'
+/**
+ * cotizacion: precio consultado, no toca stock ni costos.
+ * borrador: pedida al proveedor, mercadería aún no llegó.
+ * parcial: llegó una parte. recibida: llegó todo (o se cerró lo pendiente).
+ */
+export type EstadoCompra = 'cotizacion' | 'borrador' | 'parcial' | 'recibida' | 'cancelada'
 
 /**
  * Orden de compra a un proveedor.
@@ -42,6 +47,15 @@ export default class PurchaseOrder extends BaseModel {
 
   @column.dateTime()
   declare receivedAt: DateTime | null
+
+  @column()
+  declare expectedAt: string | null
+
+  @column.dateTime()
+  declare confirmedAt: DateTime | null
+
+  @column.dateTime()
+  declare closedAt: DateTime | null
 
   @column()
   declare userId: number | null

@@ -1,6 +1,7 @@
 import Order, { type OrderStatus } from '#models/order'
 import InventoryService, { InsufficientStockError } from '#services/inventory_service'
 import OrderService from '#services/order_service'
+import OrderImages from '#services/order_images'
 import IngredientService from '#services/ingredient_service'
 import NotificationService, { EVENTOS, type EventoPedido } from '#services/notification_service'
 import db from '@adonisjs/lucid/services/db'
@@ -57,8 +58,25 @@ export default class OrdersController {
     }
 
     const pedidos = await query.paginate(page, perPage)
+    const json = pedidos.toJSON()
+    const data = await OrderImages.serializar(pedidos.all())
 
-    return { status: 'success', ...pedidos.toJSON() }
+    // Mensajes de la plataforma sin leer, por pedido.
+    const ids = pedidos.all().map((p) => p.id)
+    const sinLeer = ids.length
+      ? await db
+          .from('order_messages')
+          .whereIn('order_id', ids)
+          .where('direction', 'in')
+          .whereNull('read_at')
+          .groupBy('order_id')
+          .select('order_id')
+          .count('* as total')
+      : []
+    const mapa = new Map(sinLeer.map((f: any) => [Number(f.order_id), Number(f.total)]))
+    for (const d of data) d.platformUnread = mapa.get(d.id) ?? 0
+
+    return { status: 'success', meta: json.meta, data }
   }
 
   /** Conteo por estado, para el tablero. */
@@ -109,10 +127,11 @@ export default class OrdersController {
       .firstOrFail()
 
     await order.load('business')
+    const [data] = await OrderImages.serializar([order])
 
     return {
       status: 'success',
-      data: order,
+      data,
       whatsappUrl: OrderService.construirUrlWhatsapp(business, order),
     }
   }

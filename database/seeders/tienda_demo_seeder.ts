@@ -112,7 +112,7 @@ export default class extends BaseSeeder {
       const talla = await ProductAttribute.create({
         businessId: business.id,
         name: 'Talla',
-        type: 'size',
+        type: 'text',
         isRequired: true,
         isFilterable: true,
       })

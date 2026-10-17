@@ -1,5 +1,7 @@
 import BusinessImage from '#models/business_image'
+import { esPais, PAISES, validarWhatsapp, type CodigoPais } from '#services/countries'
 import SlugService from '#services/slug_service'
+import db from '@adonisjs/lucid/services/db'
 import type { HttpContext } from '@adonisjs/core/http'
 
 /**
@@ -23,6 +25,7 @@ export default class StoreSettingsController {
       'description',
       'logo_url',
       'whatsapp_phone',
+      'country',
       'whatsapp_message_template',
       'phone',
       'email',
@@ -49,18 +52,35 @@ export default class StoreSettingsController {
       business.slug = await SlugService.uniqueSlugGlobal('businesses', data.slug, business.id)
     }
 
+    // País: de él salen el impuesto y el formato del WhatsApp.
+    if (data.country !== undefined && !esPais(data.country)) {
+      return response.unprocessableEntity({
+        status: 'error',
+        message: `El país debe ser uno de: ${Object.values(PAISES).map((p) => p.nombre).join(', ')}`,
+      })
+    }
+    const paisAntes = business.country as CodigoPais
+    const pais: CodigoPais = (data.country as CodigoPais | undefined) ?? paisAntes ?? 'PE'
+
     if (data.whatsapp_phone !== undefined) {
       const digitos = String(data.whatsapp_phone ?? '').replace(/\D/g, '')
 
-      if (digitos && digitos.length < 9) {
-        return response.unprocessableEntity({
-          status: 'error',
-          message: 'El número de WhatsApp debe incluir el código de país, por ejemplo 51987654321',
-        })
+      // Solo se valida lo que cambia: un número ya guardado no bloquea otros ajustes.
+      if (digitos && (digitos !== business.whatsappPhone || pais !== paisAntes)) {
+        const error = validarWhatsapp(pais, digitos)
+        if (error) return response.unprocessableEntity({ status: 'error', message: error })
       }
 
       business.whatsappPhone = digitos || null
     }
+
+    if (pais !== paisAntes && business.whatsappPhone && validarWhatsapp(pais, business.whatsappPhone)) {
+      return response.unprocessableEntity({
+        status: 'error',
+        message: `Tu WhatsApp no es de ${PAISES[pais].nombre}. Corrígelo para cambiar de país.`,
+      })
+    }
+    business.country = pais
 
     if (data.banner_image_id) {
       const imagen = await BusinessImage.query()
@@ -123,7 +143,19 @@ export default class StoreSettingsController {
         : business.businessType,
     })
 
-    await business.save()
+    await db.transaction(async (trx) => {
+      business.useTransaction(trx)
+      await business.save()
+
+      // El impuesto es del país, no del producto: al cambiar de país todos
+      // los productos pasan al impuesto del nuevo país.
+      if (pais !== paisAntes) {
+        await trx
+          .from('products')
+          .where('business_id', business.id)
+          .update({ tax_rate: PAISES[pais].impuesto.tasa })
+      }
+    })
 
     return {
       status: 'success',

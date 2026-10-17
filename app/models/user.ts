@@ -44,6 +44,22 @@ export default class User extends compose(BaseModel, AuthFinder) {
   @hasMany(() => Business, { foreignKey: 'userId' })
   declare businesses: HasMany<typeof Business>
 
+  /** Perfil de cliente: WhatsApp y dirección de entrega guardada. */
+  @column()
+  declare phone: string | null
+
+  @column()
+  declare deliveryAddress: string | null
+
+  @column()
+  declare deliveryCity: string | null
+
+  @column()
+  declare latitude: number | null
+
+  @column()
+  declare longitude: number | null
+
   @column()
   declare status: 'activo' | 'inactivo'
 

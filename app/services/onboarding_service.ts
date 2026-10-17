@@ -7,6 +7,7 @@ import Product from '#models/product'
 import ProductModifierGroup from '#models/product_modifier_group'
 import ProductVariation from '#models/product_variation'
 import type User from '#models/user'
+import { PAISES, validarWhatsapp, type CodigoPais } from '#services/countries'
 import InventoryService from '#services/inventory_service'
 import SlugService from '#services/slug_service'
 import { findTemplate } from '#services/templates/catalog_templates'
@@ -21,6 +22,7 @@ export type BusinessInput = {
   business_type: 'retail' | 'restaurant'
   template?: string
   whatsapp_phone: string
+  country?: CodigoPais
   city?: string
   address?: string
   schedule?: string
@@ -46,6 +48,10 @@ export default class OnboardingService {
       throw new Error('La plantilla no corresponde al tipo de negocio')
     }
 
+    const pais: CodigoPais = input.country ?? 'PE'
+    const errorTelefono = validarWhatsapp(pais, String(input.whatsapp_phone ?? '').replace(/\D/g, ''))
+    if (errorTelefono) throw new Error(errorTelefono)
+
     return db.transaction(async (trx) => {
       const opts = { client: trx }
 
@@ -58,6 +64,7 @@ export default class OnboardingService {
           businessType: input.business_type,
           businessSubtype: template?.key ?? null,
           whatsappPhone: input.whatsapp_phone,
+          country: pais,
           city: input.city ?? null,
           address: input.address ?? null,
           schedule: input.schedule ?? null,
@@ -104,7 +111,7 @@ export default class OnboardingService {
                 description: item.description ?? null,
                 price: item.price,
                 cost: item.cost ?? 0,
-                taxRate: 18,
+                taxRate: PAISES[pais].impuesto.tasa,
                 lowStockThreshold: 5,
                 sortOrder: pi,
                 stock: 0,

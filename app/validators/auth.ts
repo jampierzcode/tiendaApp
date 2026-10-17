@@ -62,6 +62,7 @@ export const updatePasswordValidator = vine.compile(
 const businessShape = {
   name: vine.string().trim().minLength(2).maxLength(120),
   business_type: vine.enum(['retail', 'restaurant']),
+  country: vine.enum(['PE', 'MX', 'CL']).optional(),
   /** Clave de plantilla de catálogo; vacío = empezar sin productos. */
   template: vine.string().trim().optional(),
   whatsapp_phone: vine

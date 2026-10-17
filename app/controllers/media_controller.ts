@@ -23,6 +23,9 @@ export default class MediaController {
       // La clave lleva un uuid, así que el contenido de una URL nunca cambia:
       // se puede cachear para siempre.
       response.header('Cache-Control', 'public, max-age=31536000, immutable')
+      // La respuesta cambia según el origen (cabeceras CORS): sin esto el caché
+      // del navegador reusa la copia de un <img> y el fetch del cartel falla.
+      response.header('Vary', 'Origin')
       response.header('Content-Type', archivo.contentType)
       if (archivo.etag) response.header('ETag', archivo.etag)
       if (archivo.contentLength) response.header('Content-Length', String(archivo.contentLength))

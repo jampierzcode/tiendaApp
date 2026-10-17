@@ -26,6 +26,10 @@ export default class PurchaseOrderItem extends BaseModel {
   @column()
   declare lineTotal: number
 
+  /** Lo que ya entró físicamente; nunca pasa de `quantity`. */
+  @column()
+  declare receivedQuantity: number
+
   @belongsTo(() => PurchaseOrder)
   declare purchaseOrder: BelongsTo<typeof PurchaseOrder>
 

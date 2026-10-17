@@ -5,7 +5,7 @@ import User from '#models/user'
 export default class InicioAppSeeder extends BaseSeeder {
   public async run() {
     // 🔹 Crear roles si no existen
-    const rolesData = [{ name: 'superadmin' }, { name: 'admin' }]
+    const rolesData = [{ name: 'superadmin' }, { name: 'admin' }, { name: 'cliente' }]
 
     // En serie a propósito: con Promise.all los roles se insertaban a la vez
     // y los ids salían en orden distinto en cada instalación.

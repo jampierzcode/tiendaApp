@@ -1,3 +1,4 @@
+import { PAISES, type CodigoPais } from '#services/countries'
 import { BaseModel, column, computed, hasMany, belongsTo, beforeCreate } from '@adonisjs/lucid/orm'
 import { DateTime } from 'luxon'
 import Product from './product.js'
@@ -36,6 +37,10 @@ export default class Business extends BaseModel {
   /** Número al que llegan los pedidos, en formato internacional sin signos. */
   @column()
   declare whatsappPhone: string | null
+
+  /** PE, MX o CL. Define el impuesto y el formato del WhatsApp. */
+  @column()
+  declare country: string
 
   /**
    * Plantilla del mensaje. Admite {{codigo}}, {{cliente}}, {{productos}},
@@ -164,6 +169,17 @@ export default class Business extends BaseModel {
     if (!business.slug) {
       business.slug = await SlugService.uniqueSlugGlobal('businesses', business.name)
     }
+  }
+
+  /** Impuesto de las ventas según el país: IGV 18 % en Perú, IVA 16 % en México… */
+  @computed()
+  get taxRate() {
+    return PAISES[(this.country as CodigoPais) ?? 'PE']?.impuesto.tasa ?? 18
+  }
+
+  @computed()
+  get taxName() {
+    return PAISES[(this.country as CodigoPais) ?? 'PE']?.impuesto.nombre ?? 'IGV'
   }
 
   get esRestaurante() {

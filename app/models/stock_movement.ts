@@ -12,6 +12,8 @@ export type StockMovementType =
   | 'ajuste'
   | 'inicial'
   | 'merma'
+  | 'entrada_manual'
+  | 'salida_manual'
 
 /**
  * Una línea del kardex. Nunca se edita ni se borra: para corregir un error

@@ -28,6 +28,14 @@ export default class ProductVariation extends BaseModel {
   @column()
   declare price: number
 
+  /** Mínimo propio de esta variación; null = el del producto. */
+  @column()
+  declare lowStockThreshold: number | null
+
+  /** Último costo de compra de esta variación. No es el precio de venta. */
+  @column()
+  declare cost: number | null
+
   /**
    * Saldo de inventario. Lo escribe únicamente InventoryService, que a la vez
    * deja la línea correspondiente en el kardex.

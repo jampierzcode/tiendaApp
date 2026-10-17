@@ -36,6 +36,9 @@ import SubcategoriesController from '#controllers/subcategories_controller'
 import BusinessImagesController from '#controllers/business_images_controller'
 import InventoryController from '#controllers/inventory_controller'
 import TagsController from '#controllers/tags_controller'
+import CustomerAccountsController from '#controllers/customer_accounts_controller'
+import OrderMessagesController from '#controllers/order_messages_controller'
+import NotificationsController from '#controllers/notifications_controller'
 import StorefrontController from '#controllers/storefront_controller'
 import OrdersController from '#controllers/orders_controller'
 import StoreSettingsController from '#controllers/store_settings_controller'
@@ -45,6 +48,8 @@ import CustomersController from '#controllers/customers_controller'
 import PosController from '#controllers/pos_controller'
 import SuppliersController from '#controllers/suppliers_controller'
 import PurchasesController from '#controllers/purchases_controller'
+import PriceReviewsController from '#controllers/price_reviews_controller'
+import ShipmentsController from '#controllers/shipments_controller'
 import ReportsController from '#controllers/reports_controller'
 import ModifierGroupsController from '#controllers/modifier_groups_controller'
 import IngredientsController from '#controllers/ingredients_controller'
@@ -92,7 +97,12 @@ router
     router.get('/products', [StorefrontController, 'products']).as('store.products')
     router.get('/products/:productSlug', [StorefrontController, 'product']).as('store.product')
     router.get('/products/:productSlug/related', [StorefrontController, 'related']).as('store.related')
+    router.get('/promotions', [StorefrontController, 'promotions']).as('store.promotions')
+    router.post('/quote', [StorefrontController, 'quote']).as('store.quote')
     router.post('/orders', [StorefrontController, 'createOrder']).as('store.orders.create')
+    router.post('/account/register', [CustomerAccountsController, 'register'])
+    router.get('/orders/:code/messages', [OrderMessagesController, 'publicIndex'])
+    router.post('/orders/:code/messages', [OrderMessagesController, 'publicStore'])
     router
       .post('/orders/:code/sent', [StorefrontController, 'markOrderSent'])
       .as('store.orders.sent')
@@ -111,6 +121,22 @@ router
     router.post('/inbound', [WhatsappBotController, 'inbound'])
   })
   .prefix('/api/bot')
+
+/*
+| 1d. Cuentas de cliente (global, no depende de una tienda)
+*/
+router.post('/api/account/login', [CustomerAccountsController, 'login'])
+router
+  .group(() => {
+    router.get('/me', [CustomerAccountsController, 'me'])
+    router.put('/profile', [CustomerAccountsController, 'updateProfile'])
+    router.get('/orders', [CustomerAccountsController, 'orders'])
+    router.post('/link', [CustomerAccountsController, 'link'])
+    router.get('/orders/:slug/:code/messages', [OrderMessagesController, 'accountIndex'])
+    router.post('/orders/:slug/:code/messages', [OrderMessagesController, 'accountStore'])
+  })
+  .prefix('/api/account')
+  .use(middleware.auth({ guards: ['api'] }))
 
 /*
 | 2. Cuenta del usuario autenticado
@@ -170,6 +196,9 @@ router
     router.put('/products/reorder', [ProductsController, 'reorder'])
     router.get('/products/:id', [ProductsController, 'show'])
     router.post('/products', [ProductsController, 'store'])
+    router.post('/products/quick', [ProductsController, 'quick'])
+    router.get('/products-sku/suggest', [ProductsController, 'suggestSku'])
+    router.post('/products/:id/variations', [ProductsController, 'addVariations'])
     router.put('/products/:id', [ProductsController, 'update'])
     router.delete('/products/:id', [ProductsController, 'destroy'])
 
@@ -229,6 +258,12 @@ router
     router.post('/whatsapp/conversations/:contact/send', [WhatsappPanelController, 'send'])
 
     // Etiquetas
+    // Notificaciones (leídas / no leídas)
+    router.get('/notifications', [NotificationsController, 'index'])
+    router.put('/notifications/read-all', [NotificationsController, 'readAll'])
+    router.put('/notifications/:id/read', [NotificationsController, 'read'])
+    router.delete('/notifications/:id', [NotificationsController, 'destroy'])
+
     router.get('/tags', [TagsController, 'index'])
     router.post('/tags', [TagsController, 'store'])
     router.put('/tags/:id', [TagsController, 'update'])
@@ -266,11 +301,14 @@ router
     router.get('/inventory/movements', [InventoryController, 'movements'])
     router.get('/inventory/low-stock', [InventoryController, 'lowStock'])
     router.post('/inventory/adjust', [InventoryController, 'adjust'])
+    router.post('/inventory/manual', [InventoryController, 'manual'])
     router.post('/inventory/move', [InventoryController, 'move'])
 
     // Pedidos
     router.get('/orders', [OrdersController, 'index'])
     router.get('/orders/summary', [OrdersController, 'summary'])
+    router.get('/orders/:id/messages', [OrderMessagesController, 'panelIndex'])
+    router.post('/orders/:id/messages', [OrderMessagesController, 'panelStore'])
     router.get('/orders/:id', [OrdersController, 'show'])
     router.put('/orders/:id/status', [OrdersController, 'updateStatus'])
     router.put('/orders/:id/shipping', [OrdersController, 'updateShipping'])
@@ -293,10 +331,28 @@ router
     router.delete('/suppliers/:id', [SuppliersController, 'destroy'])
 
     router.get('/purchases', [PurchasesController, 'index'])
+    router.get('/purchases/cost-history', [PurchasesController, 'costHistory'])
     router.get('/purchases/:id', [PurchasesController, 'show'])
     router.post('/purchases', [PurchasesController, 'store'])
+    router.put('/purchases/:id', [PurchasesController, 'update'])
+    router.post('/purchases/:id/confirm', [PurchasesController, 'confirm'])
+    router.post('/purchases/:id/receipts', [PurchasesController, 'receipt'])
     router.post('/purchases/:id/receive', [PurchasesController, 'receive'])
+    router.post('/purchases/:id/close', [PurchasesController, 'close'])
     router.post('/purchases/:id/cancel', [PurchasesController, 'cancel'])
+
+    // Revisión de precios: sugiere, nunca cambia sin confirmar
+    router.get('/price-reviews', [PriceReviewsController, 'index'])
+    router.post('/price-reviews/:id/dismiss', [PriceReviewsController, 'dismiss'])
+    router.get('/products/:id/price-suggestion', [PriceReviewsController, 'suggestion'])
+    router.post('/products/:id/price', [PriceReviewsController, 'apply'])
+
+    // Envíos propios y de compras
+    router.get('/shipments', [ShipmentsController, 'index'])
+    router.get('/shipments/:id', [ShipmentsController, 'show'])
+    router.post('/shipments', [ShipmentsController, 'store'])
+    router.put('/shipments/:id', [ShipmentsController, 'update'])
+    router.post('/shipments/:id/status', [ShipmentsController, 'status'])
 
     // Devoluciones
     router.get('/returns', [PurchasesController, 'returnsIndex'])
@@ -320,6 +376,7 @@ router
     router.get('/discounts', [DiscountsController, 'index'])
     router.post('/discounts', [DiscountsController, 'store'])
     router.put('/discounts/:id', [DiscountsController, 'update'])
+    router.put('/discounts/:id/toggle', [DiscountsController, 'toggle'])
     router.delete('/discounts/:id', [DiscountsController, 'destroy'])
   })
   .prefix('/api/b/:businessUuid')

@@ -1,4 +1,6 @@
 import Customer from '#models/customer'
+import Order from '#models/order'
+import { revisarTelefonoCliente, type CodigoPais } from '#services/countries'
 import db from '@adonisjs/lucid/services/db'
 import type { HttpContext } from '@adonisjs/core/http'
 
@@ -65,14 +67,60 @@ export default class CustomersController {
     return { status: 'success', data: cliente }
   }
 
-  public async update({ params, request, business }: HttpContext) {
+  public async update({ params, request, business, response }: HttpContext) {
     const cliente = await Customer.query()
       .where('business_id', business.id)
       .andWhere('id', params.id)
       .firstOrFail()
 
-    cliente.merge(request.only(['name', 'email', 'document', 'address', 'city', 'notes']))
+    const datos = request.only(['name', 'phone', 'email', 'document', 'address', 'city', 'notes'])
+
+    if (datos.name !== undefined && String(datos.name).trim().length < 2) {
+      return response.unprocessableEntity({ status: 'error', message: 'Escribe el nombre del cliente' })
+    }
+
+    if (datos.email !== undefined) {
+      const correo = String(datos.email ?? '').trim().toLowerCase()
+      if (correo && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(correo)) {
+        return response.unprocessableEntity({ status: 'error', message: 'El correo no parece válido' })
+      }
+      datos.email = correo || null
+    }
+
+    let telefonoNuevo: string | null = null
+    if (datos.phone !== undefined) {
+      const digitos = String(datos.phone ?? '').replace(/\D/g, '')
+      const problema = revisarTelefonoCliente((business.country as CodigoPais) ?? 'PE', digitos)
+      if (problema) return response.unprocessableEntity({ status: 'error', message: problema })
+
+      if (digitos !== cliente.phone) {
+        const repetido = await Customer.query()
+          .where('business_id', business.id)
+          .andWhere('phone', digitos)
+          .whereNot('id', cliente.id)
+          .first()
+        if (repetido) {
+          return response.unprocessableEntity({
+            status: 'error',
+            message: `Ese número ya es de otro cliente (${repetido.name})`,
+          })
+        }
+        telefonoNuevo = digitos
+      }
+      datos.phone = digitos
+    }
+
+    cliente.merge(datos)
     await cliente.save()
+
+    // Los pedidos de este cliente llevan una copia del contacto: se corrige también
+    // ahí, para que el chat y los avisos de cada pedido usen el número bueno.
+    const copia: Record<string, string | null> = {}
+    if (telefonoNuevo) copia.customer_phone = telefonoNuevo
+    if (datos.email !== undefined) copia.customer_email = datos.email
+    if (Object.keys(copia).length) {
+      await Order.query().where('business_id', business.id).where('customer_id', cliente.id).update(copia)
+    }
 
     return { status: 'success', message: 'Cliente actualizado', data: cliente }
   }

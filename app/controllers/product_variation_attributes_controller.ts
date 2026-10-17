@@ -1,6 +1,7 @@
 import ProductAttributeValue from '#models/product_attribute_value'
 import ProductVariation from '#models/product_variation'
 import ProductVariationAttribute from '#models/product_variation_attribute'
+import VariationService from '#services/variation_service'
 import type { HttpContext } from '@adonisjs/core/http'
 
 export default class ProductVariationAttributesController {
@@ -17,7 +18,7 @@ export default class ProductVariationAttributesController {
    * Sincroniza de una vez los atributos de una variación: recibe la lista
    * completa de valores y deja la variación exactamente con esos.
    */
-  public async store({ request, business, response }: HttpContext) {
+  public async store({ request, business, auth, response }: HttpContext) {
     const variationId = request.input('variationId')
     const attributeValueIds = request.input('attributeValueIds') as number[] | undefined
 
@@ -74,6 +75,10 @@ export default class ProductVariationAttributesController {
         }))
       )
     }
+
+    // Si este es el primer color/talla del producto, el stock que tenía como
+    // producto simple se traslada aquí (una sola vez).
+    await VariationService.alAsignarAtributos(business.id, variation, auth.user?.id ?? null)
 
     const synced = await ProductVariationAttribute.query()
       .where('variation_id', variation.id)

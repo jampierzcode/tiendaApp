@@ -33,6 +33,10 @@ export default class Order extends BaseModel {
   @column()
   declare customerId: number | null
 
+  /** Código de un solo uso para ligar el pedido a una cuenta de cliente. */
+  @column({ serializeAs: null })
+  declare claimToken: string | null
+
   @column()
   declare channel: OrderChannel
 
@@ -44,6 +48,10 @@ export default class Order extends BaseModel {
 
   @column()
   declare customerPhone: string | null
+
+  /** Correo de contacto que dejó el cliente en este pedido (opcional). */
+  @column()
+  declare customerEmail: string | null
 
   /** Serie y correlativo del ticket. Enganche para SUNAT más adelante. */
   @column()
@@ -85,6 +93,10 @@ export default class Order extends BaseModel {
 
   @column()
   declare paidTotal: number
+
+  /** Cupón con el que se hizo el pedido, si lo hubo. */
+  @column()
+  declare couponCode: string | null
 
   @column()
   declare currency: string

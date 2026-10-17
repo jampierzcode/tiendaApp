@@ -6,7 +6,7 @@ export default class extends BaseSeeder {
   async run() {
     // Write your database queries inside the run method
     await ProductAttribute.createMany([
-      { name: 'Talla', type: 'size', isRequired: true, isFilterable: true, businessId: 1 },
+      { name: 'Talla', type: 'text', isRequired: true, isFilterable: true, businessId: 1 },
       { name: 'Color', type: 'color', isRequired: true, isFilterable: true, businessId: 1 },
       { name: 'Material', type: 'text', isRequired: false, isFilterable: true, businessId: 1 },
       { name: 'Género', type: 'select', isRequired: true, isFilterable: true, businessId: 1 },

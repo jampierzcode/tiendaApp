@@ -1,4 +1,6 @@
 import PurchaseOrder from '#models/purchase_order'
+import PurchaseReceipt from '#models/purchase_receipt'
+import Shipment from '#models/shipment'
 import ReturnNote from '#models/return_note'
 import PurchaseService, { PurchaseError } from '#services/purchase_service'
 import { InsufficientStockError } from '#services/inventory_service'
@@ -24,10 +26,39 @@ export default class PurchasesController {
       .where('business_id', business.id)
       .andWhere('id', params.id)
       .preload('supplier')
-      .preload('items', (i) => i.preload('variation', (v) => v.preload('product')))
+      .preload('items', (i) =>
+        i.preload('variation', (v) =>
+          v.preload('product').preload('attributes', (a) => a.preload('value'))
+        )
+      )
       .firstOrFail()
 
-    return { status: 'success', data: orden }
+    const recepciones = await PurchaseReceipt.query()
+      .where('purchase_order_id', orden.id)
+      .preload('items')
+      .orderBy('id', 'desc')
+    const envios = await Shipment.query()
+      .where('purchase_order_id', orden.id)
+      .preload('events', (e) => e.orderBy('happened_at', 'asc'))
+      .orderBy('id', 'desc')
+
+    return { status: 'success', data: { ...orden.serialize(), receipts: recepciones, shipments: envios } }
+  }
+
+  /** Costos que cobró cada proveedor por una variación o producto. */
+  public async costHistory({ business, request, response }: HttpContext) {
+    try {
+      const data = await PurchaseService.historialCostos(business, {
+        variationId: Number(request.input('variationId')) || undefined,
+        productId: Number(request.input('productId')) || undefined,
+      })
+      return { status: 'success', data }
+    } catch (error) {
+      if (error instanceof PurchaseError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      throw error
+    }
   }
 
   public async store({ request, business, auth, response }: HttpContext) {
@@ -38,6 +69,8 @@ export default class PurchasesController {
           supplierId: Number(request.input('supplierId')),
           documentNumber: request.input('documentNumber') ?? null,
           note: request.input('note') ?? null,
+          expectedAt: request.input('expectedAt') ?? null,
+          tipo: request.input('tipo') === 'cotizacion' ? 'cotizacion' : 'orden',
           items: request.input('items', []),
         },
         auth.user!.id
@@ -45,7 +78,8 @@ export default class PurchasesController {
 
       return response.created({
         status: 'success',
-        message: `Orden ${orden.code} creada`,
+        message:
+          orden.status === 'cotizacion' ? `Cotización ${orden.code} guardada` : `Orden ${orden.code} creada`,
         data: orden,
       })
     } catch (error) {
@@ -56,7 +90,84 @@ export default class PurchasesController {
     }
   }
 
-  /** Recibe la mercadería: es lo que la mete al inventario. */
+  public async update({ params, business, request, response }: HttpContext) {
+    try {
+      const orden = await PurchaseService.actualizar(business, Number(params.id), {
+        supplierId: request.input('supplierId') ? Number(request.input('supplierId')) : undefined,
+        documentNumber: request.input('documentNumber'),
+        note: request.input('note'),
+        expectedAt: request.input('expectedAt'),
+        items: request.input('items'),
+      })
+      return { status: 'success', message: 'Orden actualizada', data: orden }
+    } catch (error) {
+      if (error instanceof PurchaseError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      throw error
+    }
+  }
+
+  /** Cotización → pedido. Puede pasar a otro proveedor. */
+  public async confirm({ params, business, request, response }: HttpContext) {
+    try {
+      const orden = await PurchaseService.confirmarCotizacion(
+        business,
+        Number(params.id),
+        request.input('supplierId') ? Number(request.input('supplierId')) : undefined
+      )
+      return { status: 'success', message: `Pedido ${orden.code} creado`, data: orden }
+    } catch (error) {
+      if (error instanceof PurchaseError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      throw error
+    }
+  }
+
+  /** Recepción física, total o parcial: es lo que mete stock. */
+  public async receipt({ params, business, auth, request, response }: HttpContext) {
+    try {
+      const { orden, receipt, revisiones } = await PurchaseService.recibirParcial(
+        business,
+        Number(params.id),
+        {
+          items: request.input('items', []),
+          note: request.input('note') ?? null,
+          documentNumber: request.input('documentNumber') ?? null,
+          shipmentId: request.input('shipmentId') ? Number(request.input('shipmentId')) : null,
+        },
+        auth.user!.id
+      )
+      return response.created({
+        status: 'success',
+        message:
+          orden.status === 'recibida'
+            ? `Orden ${orden.code} recibida completa`
+            : `Recepción parcial ${receipt.code} registrada`,
+        data: { orden, receipt, revisionesDePrecio: revisiones },
+      })
+    } catch (error) {
+      if (error instanceof PurchaseError || error instanceof InsufficientStockError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      throw error
+    }
+  }
+
+  public async close({ params, business, request, response }: HttpContext) {
+    try {
+      const orden = await PurchaseService.cerrar(business, Number(params.id), request.input('note'))
+      return { status: 'success', message: 'Orden cerrada', data: orden }
+    } catch (error) {
+      if (error instanceof PurchaseError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      throw error
+    }
+  }
+
+  /** Recibe de una vez todo lo que falte: es lo que hacía el botón «Recibir». */
   public async receive({ params, business, auth, response }: HttpContext) {
     try {
       const orden = await PurchaseService.recibir(business, Number(params.id), auth.user!.id)

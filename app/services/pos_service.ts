@@ -8,6 +8,7 @@ import InventoryService from '#services/inventory_service'
 import { OrderError } from '#services/order_service'
 import OrderService from '#services/order_service'
 import PricingService from '#services/pricing_service'
+import PromotionService from '#services/promotion_service'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
 
@@ -38,6 +39,8 @@ export interface VentaMostrador {
   customerPhone?: string | null
   /** Descuento sobre el total de la venta, en porcentaje. */
   discountPercentage?: number
+  /** Cupón que presenta el cliente en caja. */
+  couponCode?: string | null
   note?: string | null
   userId: number
 }
@@ -90,9 +93,17 @@ export default class PosService {
         'id',
         variations.map((v) => v.productId)
       )
-      .preload('discounts')
 
     const productoPorId = new Map(products.map((p) => [p.id, p]))
+
+    // Promociones automáticas y, si el cliente presenta uno, su cupón.
+    let cupon = null as Awaited<ReturnType<typeof PromotionService.buscarCupon>>
+    if (venta.couponCode?.trim()) {
+      cupon = await PromotionService.buscarCupon(business.id, venta.couponCode)
+      if (!cupon) throw new OrderError('El cupón no es válido o ya venció')
+    }
+    const promos = await PromotionService.activas(business.id, venta.couponCode)
+    const categoriasDe = await PromotionService.categoriasPorProducto(products.map((p) => p.id))
 
     // El stock se comprueba entero antes de escribir nada, para avisar de
     // todo lo que falta de una vez en lugar de fallar en la primera línea.
@@ -142,23 +153,34 @@ export default class PosService {
 
       let subtotal = 0
       let descuentoTotal = 0
+      let cuponUsado = false
 
       for (const variation of variations) {
         const { cantidad, precio: precioManual } = cantidades.get(variation.id)!
         const producto = productoPorId.get(variation.productId)!
 
         const precioLista = Number(variation.price)
-        const conPromo = PricingService.calcular(precioLista, producto.discounts)
+        const bruto = PricingService.redondear(precioLista * cantidad)
 
-        // Si el vendedor tecleó un precio en caja, manda ese.
-        const precioFinal =
-          precioManual !== undefined && precioManual !== null
-            ? PricingService.redondear(Number(precioManual))
-            : conPromo.final
+        // Si el vendedor tecleó un precio en caja, manda ese y no hay promoción.
+        const manual = precioManual !== undefined && precioManual !== null
+        const mejor = manual
+          ? { promo: null, ahorro: 0 }
+          : PromotionService.mejorParaLinea(promos, {
+              productId: producto.id,
+              variationId: variation.id,
+              categoryIds: categoriasDe.get(producto.id) ?? [],
+              precioUnit: precioLista,
+              cantidad,
+            })
+        if (cupon && mejor.promo?.id === cupon.id) cuponUsado = true
 
-        const lineTotal = PricingService.redondear(precioFinal * cantidad)
-        subtotal += PricingService.redondear(precioLista * cantidad)
-        descuentoTotal += PricingService.redondear((precioLista - precioFinal) * cantidad)
+        const lineTotal = manual
+          ? PricingService.redondear(Number(precioManual) * cantidad)
+          : PricingService.redondear(bruto - mejor.ahorro)
+        const precioFinal = PricingService.redondear(lineTotal / cantidad)
+        subtotal += bruto
+        descuentoTotal += PricingService.redondear(bruto - lineTotal)
 
         await OrderItem.create(
           {
@@ -171,7 +193,8 @@ export default class PosService {
             variationLabel: OrderService.etiquetaVariacion(variation),
             unitPrice: precioFinal,
             unitCost: producto.cost,
-            discountPercentage: conPromo.descuento,
+            discountPercentage: bruto > 0 ? PricingService.redondear(((bruto - lineTotal) / bruto) * 100) : 0,
+            promotionName: mejor.promo?.name ?? null,
             quantity: cantidad,
             lineTotal,
           },
@@ -191,6 +214,11 @@ export default class PosService {
           trx,
         })
       }
+
+      if (cupon && !cuponUsado) {
+        throw new OrderError('El cupón no aplica a los productos de la venta')
+      }
+      if (cupon) order.couponCode = cupon.code
 
       // Descuento global aplicado sobre lo que quedó después de las promos.
       const neto = PricingService.redondear(subtotal - descuentoTotal)

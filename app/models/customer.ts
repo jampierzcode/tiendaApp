@@ -20,6 +20,10 @@ export default class Customer extends BaseModel {
   @column()
   declare email: string | null
 
+  /** Cuenta de cliente (rol `cliente`) a la que pertenece este contacto. */
+  @column()
+  declare userId: number | null
+
   @column()
   declare document: string | null
 

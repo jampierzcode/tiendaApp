@@ -69,6 +69,7 @@ export default class ReportsController {
             .filter(Boolean)
             .join(' · '),
           stock: v.stock,
+          pendiente: v.$extras.pendiente ?? 0,
         })),
         totalAlertas: bajoStock.length,
       },

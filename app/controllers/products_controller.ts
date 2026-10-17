@@ -3,6 +3,8 @@ import CategoryProduct from '#models/category_product'
 import Product from '#models/product'
 import ProductVariation from '#models/product_variation'
 import InventoryService from '#services/inventory_service'
+import VariationService, { VariationError } from '#services/variation_service'
+import SkuService from '#services/sku_service'
 import SlugService from '#services/slug_service'
 import Subcategory from '#models/subcategory'
 import Tag from '#models/tag'
@@ -205,6 +207,18 @@ export default class ProductsController {
 
     const slug = await SlugService.uniqueFor('products', business.id, data.name)
     const openingStock = Number(data.stock ?? 0)
+    const variaciones = (request.input('variations') ?? []) as {
+      attributeValueIds: number[]
+      sku?: string
+      stock?: number
+      lowStockThreshold?: number | null
+    }[]
+
+    // El SKU se propone solo; el usuario puede haberlo cambiado a mano. Los
+    // platos de un restaurante no llevan SKU.
+    if (!data.sku?.trim() && business.businessType !== 'restaurant') {
+      data.sku = await SkuService.sugerirProducto(business.id, data.name)
+    }
 
     let product: Product
     try {
@@ -218,7 +232,7 @@ export default class ProductsController {
           description: data.description ?? null,
           price: data.price,
           cost: data.cost ?? null,
-          taxRate: data.tax_rate ?? 18,
+          taxRate: business.taxRate,
           lowStockThreshold: data.low_stock_threshold ?? 5,
           businessImageId: data.business_image_id ?? null,
           status: data.status === 'inactivo' ? 'inactivo' : 'activo',
@@ -229,6 +243,28 @@ export default class ProductsController {
 
       await ProductsController.syncCategories(trx, business.id, created.id, categoryLinks)
       await ProductsController.syncTags(trx, business.id, created, tagIds)
+
+      // Con atributos elegidos desde el formulario, el producto nace ya con
+      // sus variaciones y sin variación oculta: no hay stock simple que
+      // arrastrar ni nada fantasma.
+      if (variaciones.length) {
+        for (const v of variaciones) {
+          await VariationService.crear(
+            business,
+            created,
+            {
+              attributeValueIds: v.attributeValueIds,
+              sku: v.sku,
+              stock: Number(v.stock ?? 0),
+              cost: data.cost ?? null,
+              lowStockThreshold: v.lowStockThreshold ?? null,
+            },
+            auth.user!.id,
+            trx
+          )
+        }
+        return created
+      }
 
       // Todo producto nace con una variación por defecto: es donde vive el
       // stock mientras no tenga tallas ni colores propios.
@@ -263,16 +299,213 @@ export default class ProductsController {
       return response.unprocessableEntity({
         status: 'error',
         message:
-          (error as { code?: string }).code === '23505'
-            ? 'Ya existe un producto con ese SKU en este negocio'
-            : (error as Error).message,
+          error instanceof VariationError
+            ? error.message
+            : (error as { code?: string }).code === '23505'
+              ? 'Ya existe un producto con ese SKU en este negocio'
+              : (error as Error).message,
       })
     }
 
     await product.refresh()
-    await product.load('variations')
+    await product.load('variations', (v) =>
+      v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
+    )
 
     return { status: 'success', message: 'Producto creado', data: product }
+  }
+
+  /**
+   * Alta rápida desde Compras: el producto y todas sus tallas/colores en una
+   * sola transacción, con stock 0 (la mercadería entra al recibir la orden).
+   *
+   * Con variaciones el producto nace sin variación oculta: no hay stock
+   * simple que guardar, así que no queda nada fantasma. Sin variaciones nace
+   * como cualquier producto simple.
+   */
+  public async quick({ request, business, auth, response }: HttpContext) {
+    const name = String(request.input('name') ?? '').trim()
+    const price = Number(request.input('price'))
+    const cost = request.input('cost') === undefined ? null : Number(request.input('cost'))
+    const variaciones = (request.input('variations') ?? []) as {
+      attributeValueIds: number[]
+      sku?: string
+    }[]
+    const sku = request.input('sku') || (await SkuService.sugerirProducto(business.id, name))
+
+    if (name.length < 2) {
+      return response.unprocessableEntity({ status: 'error', message: 'Escribe el nombre del producto' })
+    }
+    if (!Number.isFinite(price) || price < 0) {
+      return response.unprocessableEntity({ status: 'error', message: 'El precio base no es válido' })
+    }
+
+    try {
+      const resultado = await db.transaction(async (trx) => {
+        const product = await Product.create(
+          {
+            businessId: business.id,
+            name,
+            slug: await SlugService.uniqueFor('products', business.id, name),
+            sku,
+            price,
+            cost,
+            taxRate: business.taxRate,
+            lowStockThreshold: 5,
+            status: 'activo',
+            stock: 0,
+          },
+          { client: trx }
+        )
+
+        if (!variaciones.length) {
+          const unica = await ProductVariation.create(
+            {
+              businessId: business.id,
+              productId: product.id,
+              sku,
+              isDefault: true,
+              price,
+              cost,
+              stock: 0,
+            },
+            { client: trx }
+          )
+          return { product, variations: [unica] }
+        }
+
+        const creadas: ProductVariation[] = []
+        for (const v of variaciones) {
+          creadas.push(
+            await VariationService.crear(
+              business,
+              product,
+              { attributeValueIds: v.attributeValueIds, sku: v.sku, price, cost },
+              auth.user!.id,
+              trx
+            )
+          )
+        }
+        return { product, variations: creadas }
+      })
+
+      for (const v of resultado.variations) {
+        await v.load('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
+      }
+
+      return response.created({
+        status: 'success',
+        message: 'Producto creado',
+        data: { ...resultado.product.serialize(), variations: resultado.variations },
+      })
+    } catch (error) {
+      if (error instanceof VariationError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      return response.unprocessableEntity({
+        status: 'error',
+        message:
+          (error as { code?: string }).code === '23505'
+            ? 'Ya existe un producto o variación con ese SKU en este negocio'
+            : (error as Error).message,
+      })
+    }
+  }
+
+  /** Agrega varias variaciones a un producto de una sola vez (todo o nada). */
+  public async addVariations({ params, business, auth, request, response }: HttpContext) {
+    const product = await Product.query()
+      .where('id', params.id)
+      .andWhere('business_id', business.id)
+      .firstOrFail()
+    const variaciones = (request.input('variations') ?? []) as {
+      attributeValueIds: number[]
+      sku?: string
+      stock?: number
+      lowStockThreshold?: number | null
+    }[]
+
+    if (!variaciones.length) {
+      return response.unprocessableEntity({ status: 'error', message: 'No hay variaciones que agregar' })
+    }
+
+    try {
+      const creadas = await db.transaction(async (trx) => {
+        const out: ProductVariation[] = []
+        for (const v of variaciones) {
+          out.push(
+            await VariationService.crear(
+              business,
+              product,
+              {
+                attributeValueIds: v.attributeValueIds,
+                sku: v.sku,
+                stock: Number(v.stock ?? 0),
+                lowStockThreshold: v.lowStockThreshold ?? null,
+              },
+              auth.user!.id,
+              trx
+            )
+          )
+        }
+        return out
+      })
+      for (const v of creadas) {
+        await v.load('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
+      }
+      return response.created({ status: 'success', message: 'Variaciones creadas', data: creadas })
+    } catch (error) {
+      if (error instanceof VariationError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      return response.unprocessableEntity({
+        status: 'error',
+        message:
+          (error as { code?: string }).code === '23505'
+            ? 'Alguna variación repite un SKU de este negocio'
+            : (error as Error).message,
+      })
+    }
+  }
+
+  /** SKU que se propone por defecto (producto o variación). Solo sugiere. */
+  public async suggestSku({ business, request }: HttpContext) {
+    const nombre = String(request.input('name') ?? '')
+    const productId = Number(request.input('productId')) || null
+    const valueIds = String(request.input('valueIds') ?? '')
+      .split(',')
+      .map(Number)
+      .filter(Boolean)
+
+    if (productId || valueIds.length) {
+      const product = productId
+        ? await Product.query().where('id', productId).andWhere('business_id', business.id).firstOrFail()
+        : null
+      const valores = valueIds.length
+        ? await db
+            .from('product_attribute_values')
+            .where('business_id', business.id)
+            .whereIn('id', valueIds)
+            .select('id', 'value')
+        : []
+      const ordenados = valueIds
+        .map((id) => valores.find((v: any) => v.id === id)?.value)
+        .filter(Boolean) as string[]
+
+      return {
+        status: 'success',
+        data: {
+          sku: await SkuService.sugerirVariacion(
+            business.id,
+            product?.sku ?? (nombre ? await SkuService.sugerirProducto(business.id, nombre) : null),
+            ordenados,
+            product?.name ?? nombre
+          ),
+        },
+      }
+    }
+
+    return { status: 'success', data: { sku: await SkuService.sugerirProducto(business.id, nombre) } }
   }
 
   public async update({ params, request, business, response }: HttpContext) {
@@ -295,6 +528,49 @@ export default class ProductsController {
     const categoryLinks = request.input('category_links') as CategoryLinkInput[] | undefined
     const tagIds = request.input('tag_ids') as number[] | undefined
 
+    // Cambiar el precio base de un producto con tallas/colores: las variaciones
+    // que usan el precio base lo siguen solas; si alguna tiene un precio propio
+    // hay que decidir (nunca se pisa en silencio).
+    const precioAnterior = Number(product.price)
+    const cambiaPrecio =
+      data.price !== undefined && Math.abs(Number(data.price) - precioAnterior) > 0.004
+    const modoPrecio = request.input('price_mode') as 'base_only' | 'all' | undefined
+    let variacionesReales: ProductVariation[] = []
+
+    if (cambiaPrecio) {
+      variacionesReales = await ProductVariation.query()
+        .where('product_id', product.id)
+        .where('business_id', business.id)
+        .whereRaw(`NOT ${VariationService.SQL_DEFAULT_RETIRADA}`)
+        .where('is_default', false)
+        .preload('attributes', (a) => a.preload('value'))
+
+      const propias = variacionesReales.filter((v) => Math.abs(Number(v.price) - precioAnterior) > 0.004)
+
+      if (propias.length && modoPrecio !== 'base_only' && modoPrecio !== 'all') {
+        return response.status(409).json({
+          status: 'error',
+          code: 'price_decision',
+          message: 'Algunas variaciones tienen un precio distinto al precio base',
+          data: {
+            precioAnterior,
+            precioNuevo: Number(data.price),
+            variaciones: propias.map((v) => ({
+              id: v.id,
+              sku: v.sku,
+              label:
+                v.attributes
+                  .map((a) => a.value?.value)
+                  .filter(Boolean)
+                  .join(' · ') || v.sku,
+              precio: Number(v.price),
+            })),
+            total: variacionesReales.length,
+          },
+        })
+      }
+    }
+
     // El slug solo se regenera si cambió el nombre, para no romper enlaces
     // que ya estén circulando por WhatsApp.
     if (data.name && data.name !== product.name) {
@@ -307,7 +583,8 @@ export default class ProductsController {
       price: data.price ?? product.price,
       cost: data.cost ?? product.cost,
       sku: data.sku ?? product.sku,
-      taxRate: data.tax_rate ?? product.taxRate,
+      // El impuesto lo define el país del negocio; no se edita por producto.
+      taxRate: business.taxRate,
       lowStockThreshold: data.low_stock_threshold ?? product.lowStockThreshold,
       businessImageId: data.business_image_id ?? product.businessImageId,
       status: data.status ?? product.status,
@@ -335,6 +612,19 @@ export default class ProductsController {
           .count('* as total')
           .first()
         const simple = Number(conAtributos?.total ?? 0) === 0
+
+        if (cambiaPrecio && variacionesReales.length) {
+          // 'all' pisa todas; si no, solo las que usaban el precio base.
+          const objetivo =
+            modoPrecio === 'all'
+              ? variacionesReales
+              : variacionesReales.filter((v) => Math.abs(Number(v.price) - precioAnterior) <= 0.004)
+          if (objetivo.length) {
+            await ProductVariation.query({ client: trx })
+              .whereIn('id', objetivo.map((v) => v.id))
+              .update({ price: Number(data.price) })
+          }
+        }
 
         if (simple) {
           const cambios: Record<string, unknown> = {}

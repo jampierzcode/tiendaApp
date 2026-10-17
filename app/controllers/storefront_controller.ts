@@ -1,3 +1,7 @@
+import { randomBytes } from 'node:crypto'
+import Customer from '#models/customer'
+import OrderImages from '#services/order_images'
+import PanelNotificationService from '#services/panel_notification_service'
 import Business from '#models/business'
 import Category from '#models/category'
 import Order from '#models/order'
@@ -5,7 +9,9 @@ import ProductModifierGroup from '#models/product_modifier_group'
 import Product from '#models/product'
 import ProductAttribute from '#models/product_attribute'
 import OrderService, { OrderError } from '#services/order_service'
-import PricingService from '#services/pricing_service'
+import VariationService from '#services/variation_service'
+import PromotionService from '#services/promotion_service'
+import type Discount from '#models/discount'
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
 import type { ModelQueryBuilderContract } from '@adonisjs/lucid/types/model'
@@ -51,6 +57,7 @@ export default class StorefrontController {
       status: 'success',
       data: {
         slug: business.slug,
+        country: business.country,
         businessType: business.businessType,
         paymentPolicy: business.paymentPolicy,
         paymentInstructions: business.paymentInstructions,
@@ -95,7 +102,6 @@ export default class StorefrontController {
       .andWhere('status', 'activo')
       .where(visiblePorCategoria)
       .preload('businessImages')
-      .preload('discounts')
       .preload('tags')
       .preload('defaultVariation')
       .preload('categoryLinks', (l) => l.preload('category'))
@@ -138,8 +144,15 @@ export default class StorefrontController {
       .orderBy('sort_order', 'asc')
       .orderBy('name', 'asc')
 
+    const promos = await PromotionService.activas(business.id)
+
     const platos = products.map((p) => {
-      const precio = PricingService.calcular(p.price, p.discounts)
+      const precio = PromotionService.precioPublico(
+        promos,
+        p.id,
+        p.categoryLinks.map((l) => l.categoryId),
+        Number(p.price)
+      )
       return {
         id: p.id,
         name: p.name,
@@ -148,6 +161,7 @@ export default class StorefrontController {
         imageUrl: p.businessImages?.url ?? null,
         price: precio.final,
         originalPrice: precio.descuento > 0 ? precio.original : null,
+        promos: precio.etiquetas,
         categoryIds: p.categoryLinks.map((l) => l.categoryId),
         subcategoryIds: p.categoryLinks
           .map((l) => l.subcategoryId)
@@ -195,6 +209,8 @@ export default class StorefrontController {
       return response.notFound({ status: 'error', message: 'Pedido no encontrado' })
     }
 
+    const imagenes = await OrderImages.deItems(order.items)
+
     return {
       status: 'success',
       data: {
@@ -209,6 +225,9 @@ export default class StorefrontController {
         currencySymbol: business.currencySymbol,
         createdAt: order.createdAt,
         items: order.items.map((i) => ({
+          imageUrl: imagenes.get(i.id) ?? null,
+          variation: i.variationLabel,
+          unitPrice: Number(i.unitPrice),
           name: i.productName,
           quantity: i.quantity,
           lineTotal: Number(i.lineTotal),
@@ -289,13 +308,16 @@ export default class StorefrontController {
     const maxPrice = request.input('maxPrice')
     const valueIds = this.comoLista(request.input('attributeValues'))
 
-    // Cada palabra tiene que aparecer en el nombre, el SKU o la descripción
+    // Cada palabra tiene que aparecer en el nombre, el SKU, la descripción o una etiqueta
     // (donde viven la referencia OEM y la aplicación): "bobina accent" y
     // "27301-03200" encuentran lo mismo que escribiría un mecánico.
     for (const palabra of search.split(/\s+/).filter(Boolean).slice(0, 6)) {
       const like = `%${palabra}%`
       query.where((q) => {
-        q.whereILike('name', like).orWhereILike('sku', like).orWhereILike('description', like)
+        q.whereILike('name', like)
+          .orWhereILike('sku', like)
+          .orWhereILike('description', like)
+          .orWhereHas('tags', (t) => t.whereILike('tags.name', like))
       })
     }
 
@@ -476,7 +498,6 @@ export default class StorefrontController {
       .andWhere('status', 'activo')
       .where(visiblePorCategoria)
       .preload('businessImages')
-      .preload('discounts')
       .preload('tags')
       .preload('categoryLinks', (l) => l.preload('category').preload('subcategory'))
       .preload('variations', (v) => {
@@ -495,11 +516,12 @@ export default class StorefrontController {
     query.orderBy(columna, direccion)
 
     const paginados = await query.paginate(page, perPage)
+    const promos = await PromotionService.activas(business.id)
 
     return {
       status: 'success',
       meta: paginados.getMeta(),
-      data: paginados.all().map((p) => this.resumenProducto(p, business)),
+      data: paginados.all().map((p) => this.resumenProducto(p, business, promos)),
     }
   }
 
@@ -540,8 +562,7 @@ export default class StorefrontController {
         .whereNotIn('id', excluir)
         .whereHas('categoryLinks', (l) => l.whereIn(columna, ids))
         .preload('businessImages')
-        .preload('discounts')
-        .preload('tags')
+          .preload('tags')
         .preload('categoryLinks', (l) => l.preload('category').preload('subcategory'))
         .preload('variations', (v) => {
           v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
@@ -556,7 +577,8 @@ export default class StorefrontController {
     await cargar('subcategory_id', subIds)
     await cargar('category_id', catIds)
 
-    return { status: 'success', data: elegidos.map((p) => this.resumenProducto(p, business)) }
+    const promos = await PromotionService.activas(business.id)
+    return { status: 'success', data: elegidos.map((p) => this.resumenProducto(p, business, promos)) }
   }
 
   /** Ficha del producto, con sus variaciones y stock real. */
@@ -573,7 +595,6 @@ export default class StorefrontController {
       .andWhere('status', 'activo')
       .where(visiblePorCategoria)
       .preload('businessImages')
-      .preload('discounts')
       .preload('tags')
       .preload('categoryLinks', (l) => l.preload('category').preload('subcategory'))
       .preload('variations', (v) => {
@@ -586,12 +607,14 @@ export default class StorefrontController {
       return response.notFound({ status: 'error', message: 'Producto no encontrado' })
     }
 
-    const precio = PricingService.calcular(product.price, product.discounts)
+    const promos = await PromotionService.activas(business.id)
+    const categoryIds = product.categoryLinks.map((l) => l.categoryId)
+    const precio = PromotionService.precioPublico(promos, product.id, categoryIds, Number(product.price))
 
     return {
       status: 'success',
       data: {
-        ...this.resumenProducto(product, business),
+        ...this.resumenProducto(product, business, promos),
         description: product.description,
         categorias: product.categoryLinks.map((l) => ({
           category: { name: l.category.name, slug: l.category.slug },
@@ -599,10 +622,13 @@ export default class StorefrontController {
             ? { name: l.subcategory.name, slug: l.subcategory.slug }
             : null,
         })),
-        variations: product.variations.map((v) => {
-          const precioVariacion = PricingService.calcular(
+        variations: VariationService.visibles(product.variations).map((v) => {
+          const precioVariacion = PromotionService.precioPublico(
+            promos,
+            product.id,
+            categoryIds,
             Number(v.price),
-            product.discounts
+            v.id
           )
 
           return {
@@ -638,7 +664,7 @@ export default class StorefrontController {
    * Se guarda primero y se manda a WhatsApp después: así el negocio ve el
    * pedido aunque el cliente nunca llegue a enviar el mensaje.
    */
-  public async createOrder({ params, request, response }: HttpContext) {
+  public async createOrder({ params, request, response, auth }: HttpContext) {
     const business = await this.tiendaPublica(params.slug)
 
     if (!business) {
@@ -655,11 +681,13 @@ export default class StorefrontController {
     const datos = request.only([
       'customerName',
       'customerPhone',
+      'customerEmail',
       'deliveryMethod',
       'deliveryAddress',
       'deliveryCity',
       'tableLabel',
       'note',
+      'couponCode',
       'items',
     ])
 
@@ -668,11 +696,31 @@ export default class StorefrontController {
         ? await OrderService.crearDesdeMenu(business, datos as any)
         : await OrderService.crearDesdeTienda(business, datos as any)
 
+      await PanelNotificationService.pedidoNuevo(business, order)
+
+      // Código de un solo uso para que quien pidió pueda crear su cuenta y
+      // ver este pedido; si ya tiene sesión de cliente, se liga al instante.
+      const claimToken = randomBytes(24).toString('hex')
+      order.claimToken = claimToken
+      await order.save()
+      try {
+        if (order.customerId && (await auth.check())) {
+          const user = auth.user!
+          await user.load('role')
+          if (user.role?.name === 'cliente') {
+            await Customer.query().where('id', order.customerId).whereNull('user_id').update({ user_id: user.id })
+          }
+        }
+      } catch {
+        // un token inválido no debe impedir el pedido
+      }
+
       return response.created({
         status: 'success',
         message: 'Pedido registrado',
         data: {
           code: order.code,
+          claimToken,
           total: Number(order.total),
           subtotal: Number(order.subtotal),
           discountTotal: Number(order.discountTotal),
@@ -687,6 +735,75 @@ export default class StorefrontController {
       }
       throw error
     }
+  }
+
+  /** Promociones automáticas vigentes: lo que la tienda muestra en su banner de ofertas. */
+  public async promotions({ params, response }: HttpContext) {
+    const business = await this.tiendaPublica(params.slug)
+    if (!business) {
+      return response.notFound({ status: 'error', message: 'Tienda no encontrada' })
+    }
+
+    const promos = (await PromotionService.activas(business.id)).filter((p) => !p.code)
+    const nombres = await PromotionService.nombresDestinos(business.id, promos)
+
+    // Para enlazar la oferta: un único producto o una única categoría.
+    const ids = (p: Discount, kind: string) => (p.targets ?? []).filter((t) => t.kind === kind).map((t) => t.targetId)
+    const productos = await Product.query()
+      .where('business_id', business.id)
+      .whereIn('id', promos.flatMap((p) => ids(p, 'product')))
+      .select('id', 'slug')
+    const categorias = await Category.query()
+      .where('business_id', business.id)
+      .whereIn('id', promos.flatMap((p) => ids(p, 'category')))
+      .select('id', 'slug')
+    const slugProducto = new Map(productos.map((p) => [p.id, p.slug]))
+    const slugCategoria = new Map(categorias.map((c) => [c.id, c.slug]))
+
+    return {
+      status: 'success',
+      data: promos.map((p) => {
+        const destinos = (p.targets ?? []).map((t) => nombres.get(`${t.kind}:${t.targetId}`)).filter(Boolean) as string[]
+        const unico = (p.targets ?? []).length === 1 ? p.targets[0] : null
+        return {
+          id: p.id,
+          name: p.name,
+          kind: p.kind,
+          label: PromotionService.etiqueta(p, business.currencySymbol),
+          scope: p.scope === 'all' ? 'all' : 'selection',
+          // Qué abarca, en palabras: «Polo, Casaca y 2 más».
+          alcance:
+            p.scope === 'all'
+              ? null
+              : destinos.length <= 2
+                ? destinos.join(' y ')
+                : `${destinos.slice(0, 2).join(', ')} y ${destinos.length - 2} más`,
+          product: unico?.kind === 'product' && slugProducto.get(unico.targetId)
+            ? { name: nombres.get(`product:${unico.targetId}`)!, slug: slugProducto.get(unico.targetId)! }
+            : null,
+          category: unico?.kind === 'category' && slugCategoria.get(unico.targetId)
+            ? { name: nombres.get(`category:${unico.targetId}`)!, slug: slugCategoria.get(unico.targetId)! }
+            : null,
+          dias: PromotionService.diasTexto(p),
+          endDate: p.endDate ? p.endDate.toISODate() : null,
+        }
+      }),
+    }
+  }
+
+  /** Cuánto se ahorra el carrito (promociones y cupón), antes de hacer el pedido. */
+  public async quote({ params, request, response }: HttpContext) {
+    const business = await this.tiendaPublica(params.slug)
+    if (!business) {
+      return response.notFound({ status: 'error', message: 'Tienda no encontrada' })
+    }
+
+    const data = await PromotionService.cotizar(
+      business,
+      request.input('items', []),
+      request.input('couponCode')
+    )
+    return { status: 'success', data }
   }
 
   /** El cliente confirma que abrió WhatsApp: sirve para medir conversión. */
@@ -719,8 +836,26 @@ export default class StorefrontController {
     return bruto.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0)
   }
 
-  private resumenProducto(product: Product, business: Business) {
-    const precio = PricingService.calcular(product.price, product.discounts)
+  private resumenProducto(product: Product, business: Business, promos: Discount[]) {
+    const categoryIds = (product.categoryLinks ?? []).map((l) => l.categoryId)
+    const visibles = VariationService.visibles(product.variations ?? [])
+
+    // Con variaciones, el precio de la grilla es el de la más barata y se avisa
+    // «Desde»: así quien filtra y entra nunca se encuentra con un precio distinto.
+    const precios = visibles.map((v) => ({
+      v,
+      p: PromotionService.precioPublico(promos, product.id, categoryIds, Number(v.price), v.id),
+    }))
+    const base = PromotionService.precioPublico(promos, product.id, categoryIds, Number(product.price))
+    const masBarata = precios.length ? precios.reduce((a, b) => (b.p.final < a.p.final ? b : a)) : null
+    const precio = masBarata ? masBarata.p : base
+    const desde = precios.length > 1 && new Set(precios.map((x) => x.p.final)).size > 1
+
+    // Etiquetas de todas las promociones que tocan al producto o a alguna de sus variaciones.
+    const vistas = new Map<number, { id: number; name: string; label: string }>()
+    for (const e of [...base.etiquetas, ...precios.flatMap((x) => x.p.etiquetas)]) vistas.set(e.id, e)
+    const etiquetas = [...vistas.values()]
+
     const stockTotal = (product.variations ?? []).reduce((total, v) => total + v.stock, 0)
 
     // Colores disponibles: es el dato que más se mira en una grilla de ropa.
@@ -747,6 +882,8 @@ export default class StorefrontController {
       price: precio.final,
       originalPrice: precio.descuento > 0 ? precio.original : null,
       discount: precio.descuento,
+      desde,
+      promos: etiquetas,
       currencySymbol: business.currencySymbol,
       stock: stockTotal,
       disponible: stockTotal > 0,

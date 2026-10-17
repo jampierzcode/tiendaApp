@@ -47,6 +47,9 @@ export default class OrderItem extends BaseModel {
   declare discountPercentage: number
 
   @column()
+  declare promotionName: string | null
+
+  @column()
   declare quantity: number
 
   @column()

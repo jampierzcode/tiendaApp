@@ -71,6 +71,59 @@ export default class InventoryController {
   }
 
   /**
+   * Movimiento manual para quien lleva el inventario sin pasar por Compras.
+   *
+   *  - `entrada`: suma unidades.  - `salida`: resta unidades.
+   *  - `ajuste`: la cantidad es lo que HAY (tenías 50, cuentas 20 → quedan 20).
+   *
+   * Siempre con motivo; el kardex guarda quién y cuándo. Vale para productos
+   * simples y para cada variación.
+   */
+  public async manual({ request, business, auth, response }: HttpContext) {
+    const variationId = Number(request.input('variationId'))
+    const kind = request.input('kind')
+    const quantity = Number(request.input('quantity'))
+    const reason = String(request.input('reason') ?? '').trim()
+
+    if (!variationId || !['entrada', 'salida', 'ajuste'].includes(kind)) {
+      return response.unprocessableEntity({
+        status: 'error',
+        message: 'Indica la variación y el tipo: entrada, salida o ajuste',
+      })
+    }
+    if (!Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity < 0 || (kind !== 'ajuste' && quantity < 1)) {
+      return response.unprocessableEntity({
+        status: 'error',
+        message: kind === 'ajuste' ? 'El stock real debe ser un entero desde 0' : 'La cantidad debe ser un entero mayor a 0',
+      })
+    }
+    if (reason.length < 3) {
+      return response.unprocessableEntity({ status: 'error', message: 'Escribe el motivo del movimiento' })
+    }
+
+    try {
+      const base = { businessId: business.id, variationId, userId: auth.user!.id }
+
+      const result =
+        kind === 'ajuste'
+          ? await InventoryService.setStock({ ...base, newStock: quantity, note: reason })
+          : await InventoryService.applyMovement({
+              ...base,
+              type: kind === 'entrada' ? 'entrada_manual' : 'salida_manual',
+              quantity: kind === 'entrada' ? quantity : -quantity,
+              note: reason,
+            })
+
+      return { status: 'success', message: 'Movimiento registrado', data: result }
+    } catch (error) {
+      if (error instanceof InsufficientStockError) {
+        return response.unprocessableEntity({ status: 'error', message: error.message })
+      }
+      throw error
+    }
+  }
+
+  /**
    * Entrada o salida puntual: merma, devolución o ingreso suelto.
    */
   public async move({ request, business, auth, response }: HttpContext) {
@@ -116,6 +169,9 @@ export default class InventoryController {
   /** Variaciones en o por debajo del mínimo del producto. */
   public async lowStock({ business }: HttpContext) {
     const variations = await InventoryService.lowStock(business.id)
-    return { status: 'success', data: variations }
+    return {
+      status: 'success',
+      data: variations.map((v) => ({ ...v.serialize(), pendiente: v.$extras.pendiente ?? 0 })),
+    }
   }
 }
