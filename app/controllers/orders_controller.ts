@@ -38,6 +38,15 @@ export default class OrdersController {
 
     if (status) query.where('status', status)
 
+    // "Pagado" mira el cobro real, no el estado: el pago puede llegar en
+    // cualquier etapa del pedido.
+    if (request.input('payment') === 'paid') {
+      query
+        .where('total', '>', 0)
+        .whereRaw('paid_total >= total - 0.01')
+        .whereNotIn('status', ['cancelado', 'devuelto'])
+    }
+
     if (search) {
       query.where((sub) => {
         sub
@@ -70,9 +79,19 @@ export default class OrdersController {
       .sum('total as total')
       .first()
 
+    const pagados = await db
+      .from('orders')
+      .where('business_id', business.id)
+      .where('total', '>', 0)
+      .whereRaw('paid_total >= total - 0.01')
+      .whereNotIn('status', ['cancelado', 'devuelto'])
+      .count('* as total')
+      .first()
+
     return {
       status: 'success',
       data: {
+        pagados: Number(pagados?.total ?? 0),
         porEstado,
         totalPedidos: filas.reduce((t: number, f: any) => t + Number(f.total), 0),
         ventasAcumuladas: Number(ventas?.total ?? 0),

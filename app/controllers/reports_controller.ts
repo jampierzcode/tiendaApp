@@ -46,7 +46,8 @@ export default class ReportsController {
       ReportService.clientesTop(business.id, rango, 8),
       ReportService.metodosPago(business.id, rango),
       ReportService.pedidosPorEstado(business.id, rango),
-      InventoryService.lowStock(business.id),
+      // El stock de un restaurante vive en los insumos, no en los platos.
+      business.businessType === 'restaurant' ? Promise.resolve([]) : InventoryService.lowStock(business.id),
     ])
 
     return {
