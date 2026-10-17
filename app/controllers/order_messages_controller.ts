@@ -2,6 +2,8 @@ import Business from '#models/business'
 import Customer from '#models/customer'
 import Order from '#models/order'
 import OrderMessage from '#models/order_message'
+import PushService from '#services/push_service'
+import db from '@adonisjs/lucid/services/db'
 import PanelNotificationService from '#services/panel_notification_service'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
@@ -47,7 +49,28 @@ export default class OrderMessagesController {
     const body = limpiar(request.input('body'))
     if (!body) return response.unprocessableEntity({ status: 'error', message: 'Escribe un mensaje' })
     const m = await OrderMessage.create({ businessId: business.id, orderId: order.id, direction: 'out', body })
+
+    // Si el cliente tiene cuenta, le llega un aviso push aunque no tenga la app abierta.
+    const customer = order.customerId ? await Customer.find(order.customerId) : null
+    await PushService.enviar(customer?.userId, {
+      title: business.name,
+      body: body.slice(0, 120),
+      url: `/t/${business.slug}/cuenta/pedido/${business.slug}/${order.code}`,
+      tag: `mensaje-${order.id}`,
+    })
     return response.created({ status: 'success', data: m })
+  }
+
+  /** Mensajes de clientes sin leer en toda la tienda: alimenta el globito del menú. */
+  public async panelUnread({ business }: HttpContext) {
+    const fila = await db
+      .from('order_messages')
+      .where('business_id', business.id)
+      .where('direction', 'in')
+      .whereNull('read_at')
+      .count('* as total')
+      .first()
+    return { status: 'success', data: { unread: Number(fila?.total ?? 0) } }
   }
 
   // --- Cliente con el código del pedido ---

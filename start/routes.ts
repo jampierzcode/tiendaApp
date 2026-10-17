@@ -37,6 +37,7 @@ import BusinessImagesController from '#controllers/business_images_controller'
 import InventoryController from '#controllers/inventory_controller'
 import TagsController from '#controllers/tags_controller'
 import CustomerAccountsController from '#controllers/customer_accounts_controller'
+import PushController from '#controllers/push_controller'
 import OrderMessagesController from '#controllers/order_messages_controller'
 import NotificationsController from '#controllers/notifications_controller'
 import StorefrontController from '#controllers/storefront_controller'
@@ -136,6 +137,18 @@ router
     router.post('/orders/:slug/:code/messages', [OrderMessagesController, 'accountStore'])
   })
   .prefix('/api/account')
+  .use(middleware.auth({ guards: ['api'] }))
+
+/*
+| 1e. Avisos push del navegador (cualquier usuario con sesión: dueño o cliente)
+*/
+router
+  .group(() => {
+    router.get('/key', [PushController, 'key'])
+    router.post('/subscribe', [PushController, 'subscribe'])
+    router.post('/unsubscribe', [PushController, 'unsubscribe'])
+  })
+  .prefix('/api/push')
   .use(middleware.auth({ guards: ['api'] }))
 
 /*
@@ -307,6 +320,7 @@ router
     // Pedidos
     router.get('/orders', [OrdersController, 'index'])
     router.get('/orders/summary', [OrdersController, 'summary'])
+    router.get('/orders/unread-messages', [OrderMessagesController, 'panelUnread'])
     router.get('/orders/:id/messages', [OrderMessagesController, 'panelIndex'])
     router.post('/orders/:id/messages', [OrderMessagesController, 'panelStore'])
     router.get('/orders/:id', [OrdersController, 'show'])

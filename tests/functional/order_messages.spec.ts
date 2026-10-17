@@ -192,4 +192,26 @@ test.group('Mensajes del pedido y contacto', (group) => {
     assert.equal(conMsg.lastMessage, 'Tu pedido va en camino')
     assert.equal(conMsg.lastDirection, 'out')
   })
+
+  test('globito de mensajes sin leer y suscripción push', async ({ client, assert }) => {
+    const a = await tienda('Modas A')
+    const creado = (await pedir(client, a)).body().data
+    assert.equal((await client.get(`${a.base}/orders/unread-messages`).loginAs(a.user)).body().data.unread, 0)
+
+    await client
+      .post(`/api/store/${a.business.slug}/orders/${creado.code}/messages`)
+      .header('x-claim-token', creado.claimToken)
+      .json({ body: 'hola' })
+    assert.equal((await client.get(`${a.base}/orders/unread-messages`).loginAs(a.user)).body().data.unread, 1)
+
+    // Push: clave pública, alta (idempotente) y baja.
+    ;(await client.get('/api/push/key')).assertStatus(401)
+    const llave = await client.get('/api/push/key').loginAs(a.user)
+    assert.isString(llave.body().data.key)
+    const sub = { endpoint: 'https://push.example/abc', keys: { p256dh: 'p', auth: 'a' } }
+    ;(await client.post('/api/push/subscribe').loginAs(a.user).json(sub)).assertStatus(200)
+    ;(await client.post('/api/push/subscribe').loginAs(a.user).json(sub)).assertStatus(200)
+    ;(await client.post('/api/push/subscribe').loginAs(a.user).json({ endpoint: 'x' })).assertStatus(422)
+    ;(await client.post('/api/push/unsubscribe').loginAs(a.user).json({ endpoint: sub.endpoint })).assertStatus(200)
+  })
 })

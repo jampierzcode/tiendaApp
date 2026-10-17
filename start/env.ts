@@ -52,6 +52,10 @@ export default await Env.create(new URL('../', import.meta.url), {
   BOT_API_KEY: Env.schema.string.optional(),
   /** Dominio público de la tienda, para los enlaces que manda el bot. */
   STORE_PUBLIC_URL: Env.schema.string.optional(),
+  /** Claves VAPID de los avisos push; sin ellas los avisos del navegador quedan apagados. */
+  VAPID_PUBLIC_KEY: Env.schema.string.optional(),
+  VAPID_PRIVATE_KEY: Env.schema.string.optional(),
+  VAPID_SUBJECT: Env.schema.string.optional(),
   /** Zona horaria en la que se agrupan los reportes. */
   REPORTS_TIMEZONE: Env.schema.string.optional(),
 })

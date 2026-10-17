@@ -1,6 +1,7 @@
 import Notification from '#models/notification'
 import type Business from '#models/business'
 import type Order from '#models/order'
+import PushService from '#services/push_service'
 import logger from '@adonisjs/core/services/logger'
 
 export default class PanelNotificationService {
@@ -18,6 +19,12 @@ export default class PanelNotificationService {
         title: `Pedido nuevo ${order.code}`,
         body: `${order.customerName} · ${business.currencySymbol ?? 'S/'} ${total}`,
       })
+      await PushService.enviar(business.userId, {
+        title: `Pedido nuevo ${order.code}`,
+        body: `${order.customerName} · ${business.currencySymbol ?? 'S/'} ${total}`,
+        url: `/b/${business.uuid}/orders?pedido=${order.id}`,
+        tag: `pedido-${order.id}`,
+      })
     } catch (error) {
       logger.error({ err: error }, 'No se pudo crear la notificación del pedido')
     }
@@ -32,6 +39,12 @@ export default class PanelNotificationService {
         orderId: order.id,
         title: `Mensaje de ${order.customerName} · ${order.code}`,
         body: texto.slice(0, 120),
+      })
+      await PushService.enviar(business.userId, {
+        title: `Mensaje de ${order.customerName} · ${order.code}`,
+        body: texto.slice(0, 120),
+        url: `/b/${business.uuid}/orders?pedido=${order.id}&chat=1`,
+        tag: `mensaje-${order.id}`,
       })
     } catch (error) {
       logger.error({ err: error }, 'No se pudo crear la notificación del mensaje')
