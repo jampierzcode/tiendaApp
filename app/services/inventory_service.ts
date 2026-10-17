@@ -138,6 +138,9 @@ export default class InventoryService {
     return ProductVariation.query()
       .where('product_variations.business_id', businessId)
       .join('products', 'products.id', 'product_variations.product_id')
+      // Sin esto el join trae también las columnas de `products` y su `id` y
+      // `stock` pisan los de la variación (se veía el stock total del producto).
+      .select('product_variations.*')
       .whereRaw('product_variations.stock <= products.low_stock_threshold')
       .where('products.status', 'activo')
       .preload('product')
