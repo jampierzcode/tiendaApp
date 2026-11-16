@@ -25,6 +25,28 @@ export default class OrdersController {
     devuelto: [],
   }
 
+  /**
+   * Restaurante: aceptar → cocina → listo → (delivery: en camino) → entregado.
+   * Sin «pagado» como paso (el cobro se ve aparte) ni devoluciones: un plato
+   * servido no vuelve al inventario. Un pedido de recojo o mesa nunca «sale».
+   */
+  static transicionesDe(business: { esRestaurante: boolean }, order: Order): OrderStatus[] {
+    if (!business.esRestaurante) return OrdersController.transiciones[order.status] ?? []
+    const conReparto = order.deliveryMethod === 'envio'
+    const mapa: Record<OrderStatus, OrderStatus[]> = {
+      pendiente: ['confirmado', 'cancelado'],
+      confirmado: ['preparando', 'cancelado'],
+      pagado: ['preparando', 'cancelado'],
+      preparando: ['listo', 'cancelado'],
+      listo: conReparto ? ['enviado', 'entregado', 'cancelado'] : ['entregado', 'cancelado'],
+      enviado: ['entregado', 'cancelado'],
+      entregado: [],
+      cancelado: [],
+      devuelto: [],
+    }
+    return mapa[order.status] ?? []
+  }
+
   public async index({ business, request }: HttpContext) {
     const page = Number(request.input('page', 1))
     const perPage = Number(request.input('perPage', 20))
@@ -152,7 +174,7 @@ export default class OrdersController {
       .firstOrFail()
 
     const nuevo = request.input('status') as OrderStatus
-    const permitidos = OrdersController.transiciones[order.status] ?? []
+    const permitidos = OrdersController.transicionesDe(business, order)
 
     if (!permitidos.includes(nuevo)) {
       return response.unprocessableEntity({
