@@ -389,6 +389,17 @@ export default class WhatsappBotController {
       'text',
       'kind',
     ])
+    // Fotos del cliente (base64) para que el asistente las vea. Máx. 3 y ~6 MB c/u.
+    const crudas = request.input('images')
+    const imagenes = (Array.isArray(crudas) ? crudas : [])
+      .filter(
+        (i: any) =>
+          typeof i?.data === 'string' &&
+          /^image\/(jpeg|png|webp|gif)$/.test(String(i?.mime)) &&
+          i.data.length < 8_000_000
+      )
+      .slice(0, 3)
+      .map((i: any) => ({ mime: String(i.mime), data: String(i.data) }))
     const business = await Business.findBy('uuid', businessUuid)
     if (!business) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
 
@@ -399,7 +410,8 @@ export default class WhatsappBotController {
     // Fotos, audios o stickers llegan sin texto: se describen para el asistente.
     if (kind && kind !== 'chat' && kind !== 'text') {
       const tipo: Record<string, string> = {
-        image: 'una imagen (puede ser un comprobante de pago o una foto de referencia)',
+        // Lo que queda en la conversación es neutro: en turnos siguientes la foto ya no va adjunta.
+        image: 'una foto',
         ptt: 'un audio de voz (no puedes escucharlo: pídele con amabilidad que lo escriba)',
         audio: 'un audio (no puedes escucharlo: pídele con amabilidad que lo escriba)',
         video: 'un video',
@@ -413,9 +425,26 @@ export default class WhatsappBotController {
 
     const entrante = await NotificationService.registrar(business.id, telefono, 'in', crudo, false)
 
+    // Solo para este turno: decirle al modelo si la foto viene adjunta o no se pudo abrir.
+    const paraModelo =
+      kind === 'image'
+        ? crudo.replace(
+            '[El cliente envió una foto]',
+            imagenes.length
+              ? '[El cliente envió una foto: la tienes adjunta, mírala]'
+              : '[El cliente envió una foto que no se pudo abrir: pídele que te cuente qué es]'
+          )
+        : crudo
+
     let salida: { reply: string | null; media: { url: string; caption?: string }[] } | null = null
     try {
-      salida = await SalesAgentService.responder(business, telefono, crudo, entrante.id)
+      salida = await SalesAgentService.responder(
+        business,
+        telefono,
+        paraModelo,
+        entrante.id,
+        imagenes
+      )
     } catch (error) {
       logger.error(
         { err: error, business: business.id },

@@ -21,6 +21,8 @@ const bodyParserConfig = defineConfig({
    */
   json: {
     convertEmptyStringsToNull: true,
+    // El bot manda en JSON (base64) las fotos que envía el cliente por WhatsApp.
+    limit: '12mb',
     types: [
       'application/json',
       'application/json-patch+json',

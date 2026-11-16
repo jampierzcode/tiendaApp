@@ -49,8 +49,19 @@ interface Contexto {
   pedidoCreado: Order | null
 }
 
+/** Foto que mandó el cliente, en base64 (la ve el modelo; no se guarda). */
+export interface ImagenEntrante {
+  mime: string
+  data: string
+}
+
+type ParteUsuario =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail: 'low' | 'high' | 'auto' } }
+
 type MensajeChat =
-  | { role: 'system' | 'user'; content: string }
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string | ParteUsuario[] }
   | { role: 'assistant'; content: string | null; tool_calls?: any[] }
   | { role: 'tool'; tool_call_id: string; content: string }
 
@@ -108,7 +119,8 @@ export default class SalesAgentService {
     business: Business,
     phone: string,
     texto: string,
-    mensajeId: number | null
+    mensajeId: number | null,
+    imagenes: ImagenEntrante[] = []
   ): Promise<RespuestaAgente | null> {
     if (!this.disponible() || !business.aiAgentEnabled) return null
     if (await this.enPausa(business.id, phone)) return null
@@ -117,7 +129,19 @@ export default class SalesAgentService {
     const messages: MensajeChat[] = [
       { role: 'system', content: await this.prompt(business, phone) },
       ...(await this.historial(business.id, phone, mensajeId)),
-      { role: 'user', content: texto },
+      {
+        role: 'user',
+        // Con fotos, el mensaje va en partes: el texto y cada imagen (el modelo las ve).
+        content: imagenes.length
+          ? [
+              { type: 'text', text: texto },
+              ...imagenes.map((i) => ({
+                type: 'image_url' as const,
+                image_url: { url: `data:${i.mime};base64,${i.data}`, detail: 'auto' as const },
+              })),
+            ]
+          : texto,
+      },
     ]
 
     let final: string | null = null
@@ -303,12 +327,16 @@ CÓMO TRABAJAS
 - Para precios, disponibilidad, stock, opciones o pedidos USA LAS HERRAMIENTAS. Nunca inventes productos, precios, stock, promociones, plazos ni datos que no estén arriba o que no devuelva una herramienta.
 - Busca con "buscar_productos" (palabras clave cortas, en singular: "polo", "hamburguesa"). Si no aparece, prueba con sinónimos antes de decir que no hay.
 - Antes de pedir, revisa el producto con "ver_producto" para conocer ${restaurante ? 'sus opciones obligatorias (p. ej. término, guarnición) y pregúntale al cliente las que falten' : 'sus variaciones (talla, color…) y su stock, y pregúntale al cliente cuál quiere'}.
-- Si el producto tiene foto y ayuda a vender, ofrece mandarla y envíala con "enviar_foto_producto".
+- Si el producto tiene foto y ayuda a vender, envíala con "enviar_foto_producto". Tu respuesta de texto se mandará como descripción de esa foto (en el mismo mensaje), así que escríbela pensando en eso: no digas "te envío la foto", simplemente describe y vende.
 - Para cerrar el pedido necesitas: productos y cantidades${restaurante ? ' (con sus opciones)' : ' (con la variación exacta)'}, el nombre del cliente y la forma de entrega (envío con dirección, recojo${restaurante ? ', o mesa con su número' : ''}). Pídelo de forma natural, de a pocos.
 - Antes de crear el pedido usa "cotizar_pedido" y muéstrale un resumen corto con el total real (incluye envío y descuentos). Créalo con "crear_pedido" SOLO cuando el cliente confirme ("sí", "dale", "confirmo"…).
 - Tras crear el pedido, dale el código, el total y el enlace de seguimiento; si el pago es por adelantado, explica cómo pagar con los datos de arriba y pídele que mande la foto del comprobante.
 - Si pregunta por un pedido que ya hizo, usa "mis_pedidos".
-- Si el cliente manda una foto o comprobante, agradécele y dile que el negocio lo revisará.
+- Si el cliente manda una foto, MÍRALA y actúa según lo que sea:
+  · Captura o foto de un producto (de esta tienda u otra): identifica qué es (nombre, tipo, color) y búscalo con "buscar_productos" para darle precio y disponibilidad reales.
+  · Comprobante de pago (Yape, Plin, transferencia): lee monto, fecha y número de operación, compáralo con su pedido (usa "mis_pedidos") y dile que el negocio lo verificará; no confirmes el pago como recibido.
+  · Otra cosa (foto de referencia, ubicación, problema con un producto): responde según corresponda; si es un reclamo, usa "derivar_a_humano".
+- PRECIOS: nunca rebajes ni inventes descuentos por tu cuenta. Si el cliente regatea ("¿nada menos?", "¿me lo dejas en…?"), responde con amabilidad que el precio es el publicado, menciona las promociones o cupones vigentes si los hay, y resalta el valor del producto. Solo da un descuento si las indicaciones del dueño lo permiten. Si insiste mucho, ofrécele consultarlo con el negocio usando "derivar_a_humano".
 - Si pide hablar con una persona, tiene un reclamo, quiere cambiar o cancelar un pedido ya hecho, pide algo que no puedes resolver o se molesta, usa "derivar_a_humano" y avísale que en breve lo atienden.
 - Si el mensaje no tiene nada que ver con el negocio, responde con amabilidad y redirige con suavidad.
 
