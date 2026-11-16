@@ -137,6 +137,10 @@ export default class Business extends BaseModel {
   @column()
   declare shippingZones: string | null
 
+  /** JSON: métodos de pago (ver PaymentMethodService). */
+  @column()
+  declare paymentMethods: string | null
+
   // --- Suscripción ---
 
   /** 'trial' (prueba gratis), 'active' (pagando) o 'expired'. */

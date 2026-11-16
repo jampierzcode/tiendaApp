@@ -52,6 +52,7 @@ import PurchasesController from '#controllers/purchases_controller'
 import PriceReviewsController from '#controllers/price_reviews_controller'
 import ShipmentsController from '#controllers/shipments_controller'
 import PaymentProofsController from '#controllers/payment_proofs_controller'
+import PaymentMethodsController from '#controllers/payment_methods_controller'
 import ProductGalleryController from '#controllers/product_gallery_controller'
 import ReportsController from '#controllers/reports_controller'
 import ModifierGroupsController from '#controllers/modifier_groups_controller'
@@ -376,6 +377,8 @@ router
     // Envíos propios y de compras
     router.get('/products/:id/gallery', [ProductGalleryController, 'show'])
     router.put('/products/:id/gallery', [ProductGalleryController, 'update'])
+    router.get('/payment-methods', [PaymentMethodsController, 'index'])
+    router.put('/payment-methods', [PaymentMethodsController, 'update'])
     router.get('/payment-proofs', [PaymentProofsController, 'index'])
     router.post('/payment-proofs/:id/validate', [PaymentProofsController, 'validate'])
     router.post('/payment-proofs/:id/reject', [PaymentProofsController, 'reject'])

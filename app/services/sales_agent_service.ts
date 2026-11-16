@@ -19,6 +19,8 @@ import Shipment from '#models/shipment'
 import ShipmentService from '#services/shipment_service'
 import AiUsageService from '#services/ai_usage_service'
 import PaymentProofService from '#services/payment_proof_service'
+import PaymentMethodService from '#services/payment_method_service'
+import StorageService from '#services/storage_service'
 import SellerConfigService, { type ConfigVendedor } from '#services/seller_config_service'
 import { revisarTelefonoCliente, type CodigoPais } from '#services/countries'
 import env from '#start/env'
@@ -339,6 +341,7 @@ export default class SalesAgentService {
             : '')
         : 'sin costo'
 
+    const metodosPago = PaymentMethodService.texto(business)
     const textoZonas = SellerConfigService.textoEnvios(business, ahora)
     const conZonas = Boolean(textoZonas)
 
@@ -364,6 +367,7 @@ export default class SalesAgentService {
       !conZonas &&
         `Envío a domicilio: ${envio}. También se puede recoger en el local${restaurante ? ' o pedir en mesa' : ''}.`,
       !conZonas && `Pago: ${politica}`,
+      metodosPago && `Métodos de pago (los únicos válidos; nunca des otro número ni el WhatsApp de la tienda para pagar):\n${metodosPago}`,
       business.paymentInstructions && `Cómo pagar: ${business.paymentInstructions}`,
       categorias.length && `Categorías: ${categorias.map((c) => c.name).join(', ')}`,
       !business.puedeVender &&
@@ -434,7 +438,7 @@ CÓMO TRABAJAS
 - Para cerrar el pedido necesitas: productos y cantidades${restaurante ? ' (con sus opciones)' : ' (con la variación exacta)'}, el nombre del cliente y la forma de entrega (${conZonas ? 'el tipo de entrega de su zona y los datos que ese tipo pide' : `envío con dirección, recojo${restaurante ? ', o mesa con su número' : ''}`}). Pídelo de forma natural, de a pocos.
 - Si el cliente quiere separar o reservar un producto, es lo mismo que un pedido: cotiza, confirma y créalo; luego explica el adelanto si corresponde.
 - Antes de crear el pedido usa "cotizar_pedido" y muéstrale un resumen corto con el total real (incluye envío y descuentos). Créalo con "crear_pedido" SOLO cuando el cliente confirme ("sí", "dale", "confirmo"…).
-- Tras crear el pedido, dale el código, el total y el enlace de seguimiento; si el pago es por adelantado, explica cómo pagar con los datos de arriba y pídele que mande la foto del comprobante.
+- Tras crear el pedido, dale el código, el total y el enlace de seguimiento; si el pago es por adelantado, explica cómo pagar con los métodos de pago de arriba (lista los activos con su número y titular) y pídele que mande la foto del comprobante. Los QR marcados «al confirmar» se envían solos con tu respuesta; si pide el QR de otro método, usa "enviar_qr_pago".
 - Si pregunta por un pedido que ya hizo, usa "mis_pedidos".
 - Si el cliente manda una foto, MÍRALA y actúa según lo que sea:
   · Captura o foto de un producto (de esta tienda u otra): identifica qué es (nombre, tipo, color) y búscalo con "buscar_productos" para darle precio y disponibilidad reales.
@@ -475,6 +479,16 @@ FORMATO (WhatsApp, no Markdown)
         return this.crearPedido(ctx, args)
       case 'mis_pedidos':
         return this.misPedidos(ctx.business, ctx.phone)
+      case 'enviar_qr_pago': {
+        const metodo = PaymentMethodService.activos(ctx.business).find(
+          (m) => m.id === String(args?.metodoId ?? '')
+        )
+        if (!metodo?.imagenes.length) return { enviada: false, nota: 'Ese método no tiene QR o imagen.' }
+        for (const i of metodo.imagenes) {
+          if (ctx.media.length < 4) ctx.media.push({ url: StorageService.urlAbsoluta(i.url)!, caption: metodo.nombre })
+        }
+        return { enviada: true, nota: 'El QR se enviará con tu respuesta; no pegues enlaces.' }
+      }
       case 'buscar_sedes': {
         const r = SellerConfigService.buscarSedes(
           ctx.business,
@@ -954,6 +968,20 @@ FORMATO (WhatsApp, no Markdown)
       await PanelNotificationService.pedidoNuevo(business, order)
       ctx.pedidoCreado = order
 
+      // Si hay que pagar antes, los QR marcados «al confirmar» van con la respuesta.
+      const pagaAntes = entrega.tipo
+        ? entrega.tipo.pago.tipo === 'adelantado'
+        : business.paymentPolicy === 'on_confirm'
+      if (pagaAntes) {
+        for (const m of PaymentMethodService.activos(business)) {
+          for (const i of m.imagenes.filter((x) => x.cuando === 'al_confirmar')) {
+            if (ctx.media.length < 4) {
+              ctx.media.push({ url: StorageService.urlAbsoluta(i.url)!, caption: m.nombre })
+            }
+          }
+        }
+      }
+
       // Envío por agencia o motorizado: queda listo para que el dueño anote la guía.
       if (entrega.tipo && entrega.tipo.clase !== 'recojo') {
         const agencia =
@@ -1306,6 +1334,19 @@ const TOOLS = [
       description:
         'Últimos pedidos de este cliente (por su número de WhatsApp) con estado, total y enlace de seguimiento.',
       parameters: sinParametros,
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'enviar_qr_pago',
+      description: 'Envía el QR o la imagen de un método de pago (Yape, Plin…) junto con tu respuesta.',
+      parameters: {
+        type: 'object',
+        properties: { metodoId: { type: 'string', description: 'El metodoId de la lista de métodos de pago.' } },
+        required: ['metodoId'],
+        additionalProperties: false,
+      },
     },
   },
   {

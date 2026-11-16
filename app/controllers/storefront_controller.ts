@@ -1,3 +1,5 @@
+import StorageService from '#services/storage_service'
+import PaymentMethodService from '#services/payment_method_service'
 import Shipment from '#models/shipment'
 import { randomBytes } from 'node:crypto'
 import Customer from '#models/customer'
@@ -243,6 +245,15 @@ export default class StorefrontController {
         paidTotal: Number(order.paidTotal),
         paymentPolicy: business.paymentPolicy,
         paymentInstructions: business.paymentInstructions,
+        paymentMethods: PaymentMethodService.activos(business).map((m) => ({
+          nombre: m.nombre,
+          tipo: m.tipo,
+          numero: m.numero,
+          cci: m.cci,
+          titular: m.titular,
+          instrucciones: m.instrucciones,
+          imagenes: m.imagenes.map((i) => StorageService.urlAbsoluta(i.url)),
+        })),
         currencySymbol: business.currencySymbol,
         createdAt: order.createdAt,
         items: order.items.map((i) => ({
