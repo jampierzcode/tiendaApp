@@ -261,15 +261,24 @@ export default class WhatsappBotController {
       'id',
       sesiones.map((s) => s.businessId)
     )
-    const uuidPorId = new Map(negocios.map((b) => [b.id, b.uuid]))
+    const porId = new Map(negocios.map((b) => [b.id, b]))
 
     return {
       status: 'success',
-      data: sesiones.map((s) => ({
-        businessUuid: uuidPorId.get(s.businessId),
-        desired: s.desired,
-        status: s.status,
-      })),
+      data: sesiones.map((s) => {
+        const negocio = porId.get(s.businessId)
+        // Un negocio desactivado o con el plan vencido no puede vender: su
+        // navegador (~300 MB de RAM) se apaga sin cerrar la sesión de WhatsApp,
+        // y vuelve solo, sin escanear, cuando renueva.
+        const enPausa =
+          s.desired === 'connected' &&
+          (!negocio || negocio.status !== 'activo' || negocio.subscriptionExpired)
+        return {
+          businessUuid: negocio?.uuid,
+          desired: enPausa ? 'paused' : s.desired,
+          status: s.status,
+        }
+      }),
     }
   }
 
