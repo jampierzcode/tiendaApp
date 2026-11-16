@@ -3,6 +3,8 @@ import Order from '#models/order'
 import Product from '#models/product'
 import { OrderError } from '#services/order_service'
 import PosService from '#services/pos_service'
+import PromotionService from '#services/promotion_service'
+import VariationService from '#services/variation_service'
 import { InsufficientStockError } from '#services/inventory_service'
 import type { HttpContext } from '@adonisjs/core/http'
 
@@ -11,52 +13,95 @@ import type { HttpContext } from '@adonisjs/core/http'
  */
 export default class PosController {
   /**
-   * Búsqueda rápida para la caja: por nombre o por código.
-   *
-   * Devuelve solo lo vendible — producto activo y variación con stock — para
-   * que el vendedor no le prometa al cliente algo que no hay.
+   * Catálogo de la caja: todo lo vendible (producto activo y variación con
+   * stock, o stock ilimitado), con búsqueda por nombre o código y filtros por
+   * categoría, subcategoría y «en promoción». El precio ya trae la promoción
+   * vigente, igual que lo cobra la venta.
    */
   public async search({ business, request }: HttpContext) {
     const termino = String(request.input('q', '')).trim()
+    const categoryId = Number(request.input('categoryId')) || null
+    const subcategoryId = Number(request.input('subcategoryId')) || null
+    const soloPromo = ['1', 'true'].includes(String(request.input('promo', '')))
+    const pagina = Math.max(1, Number(request.input('page', 1)) || 1)
+    const porPagina = Math.min(60, Math.max(6, Number(request.input('perPage', 24)) || 24))
 
-    if (termino.length < 2) {
-      return { status: 'success', data: [] }
-    }
-
-    const productos = await Product.query()
+    const q = Product.query()
       .where('business_id', business.id)
       .andWhere('status', 'activo')
-      .where((sub) => {
-        sub.whereILike('name', `%${termino}%`).orWhereILike('sku', `%${termino}%`)
-      })
       .preload('businessImages')
+      .preload('categoryLinks')
       .preload('variations', (v) => {
         v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
       })
-      .limit(12)
+      .orderBy('sort_order', 'asc')
+      .orderBy('name', 'asc')
+      .limit(1000)
+    if (termino) {
+      q.where((sub) => {
+        sub
+          .whereILike('name', `%${termino}%`)
+          .orWhereILike('sku', `%${termino}%`)
+          .orWhereHas('variations', (v) => v.whereILike('sku', `%${termino}%`))
+      })
+    }
+    if (categoryId || subcategoryId) {
+      q.whereHas('categoryLinks', (l) => {
+        if (categoryId) l.where('category_id', categoryId)
+        if (subcategoryId) l.where('subcategory_id', subcategoryId)
+      })
+    }
+
+    const productos = await q
+    const promos = await PromotionService.activas(business.id)
+
+    const todos = productos
+      .map((p) => {
+        const categoryIds = p.categoryLinks.map((l) => l.categoryId)
+        const variaciones = VariationService.visibles(p.variations)
+          .map((v) => {
+            const pv = PromotionService.precioPublico(promos, p.id, categoryIds, Number(v.price), v.id)
+            return {
+              id: v.id,
+              sku: v.sku,
+              stock: p.unlimitedStock ? 999 : v.stock,
+              price: pv.final,
+              originalPrice: pv.descuento > 0 ? pv.original : null,
+              isDefault: v.isDefault,
+              label: v.attributes
+                .map((a) => a.value?.value)
+                .filter(Boolean)
+                .join(' · '),
+            }
+          })
+          .filter((v) => v.stock > 0)
+        const base = PromotionService.precioPublico(promos, p.id, categoryIds, Number(p.price))
+        const etiquetas = base.etiquetas.map((e) => e.label)
+        const enPromo =
+          base.descuento > 0 || etiquetas.length > 0 || variaciones.some((v) => v.originalPrice !== null)
+        const precios = variaciones.map((v) => v.price)
+        return {
+          id: p.id,
+          name: p.name,
+          sku: p.sku,
+          price: precios.length ? Math.min(...precios) : base.final,
+          originalPrice: base.descuento > 0 ? base.original : null,
+          desde: new Set(precios).size > 1,
+          promo: enPromo,
+          promoLabels: etiquetas,
+          unlimitedStock: p.unlimitedStock,
+          stock: variaciones.reduce((t, v) => t + v.stock, 0),
+          imageUrl: p.businessImages?.url ?? null,
+          variations: variaciones,
+        }
+      })
+      .filter((p) => p.variations.length > 0)
+      .filter((p) => !soloPromo || p.promo)
 
     return {
       status: 'success',
-      data: productos.map((p) => ({
-        id: p.id,
-        name: p.name,
-        sku: p.sku,
-        price: Number(p.price),
-        imageUrl: p.businessImages?.url ?? null,
-        variations: p.variations
-          .map((v) => ({
-            id: v.id,
-            sku: v.sku,
-            stock: v.stock,
-            price: Number(v.price),
-            isDefault: v.isDefault,
-            label: v.attributes
-              .map((a) => a.value?.value)
-              .filter(Boolean)
-              .join(' · '),
-          }))
-          .filter((v) => v.stock > 0),
-      })).filter((p) => p.variations.length > 0),
+      data: todos.slice((pagina - 1) * porPagina, pagina * porPagina),
+      meta: { total: todos.length, page: pagina, perPage: porPagina },
     }
   }
 
