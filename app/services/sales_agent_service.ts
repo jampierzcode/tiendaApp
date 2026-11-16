@@ -231,9 +231,13 @@ export default class SalesAgentService {
   private static async llamarModelo(messages: MensajeChat[], business: Business) {
     const modelo = env.get('OPENAI_MODEL') ?? 'gpt-4o-mini'
     // Comprobantes y envíos por agencia son de tiendas; un restaurante no los usa.
-    const tools = business.esRestaurante
-      ? TOOLS.filter((t) => t.function.name !== 'registrar_comprobante')
-      : TOOLS
+    const sinSedes = SellerConfigService.config(business).sedes.length === 0
+    const tools = TOOLS.filter((t) => {
+      if (business.esRestaurante && ['registrar_comprobante', 'buscar_sedes'].includes(t.function.name)) {
+        return false
+      }
+      return !(sinSedes && t.function.name === 'buscar_sedes')
+    })
     const base = (env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1').replace(/\/$/, '')
     const res = await fetch(`${base}/chat/completions`, {
       method: 'POST',
@@ -471,6 +475,26 @@ FORMATO (WhatsApp, no Markdown)
         return this.crearPedido(ctx, args)
       case 'mis_pedidos':
         return this.misPedidos(ctx.business, ctx.phone)
+      case 'buscar_sedes': {
+        const r = SellerConfigService.buscarSedes(
+          ctx.business,
+          String(args?.empresa ?? ''),
+          String(args?.lugar ?? '')
+        )
+        return {
+          sedes: r.sedes.map((x) => ({
+            nombre: x.nombre,
+            direccion: x.direccion,
+            lugar: [x.distrito, x.provincia, x.departamento].filter(Boolean).join(', '),
+            referencia: x.referencia || undefined,
+          })),
+          nota: r.sedes.length
+            ? 'Muéstrale estas opciones numeradas (nombre y dirección) y pregúntale en cuál recoge. Guarda la elegida en datosCliente["Agencia de recojo"] con nombre y dirección.'
+            : r.total
+              ? 'No hay sedes cargadas en ese lugar. Pregúntale por la ciudad o provincia más cercana, o usa "derivar_a_humano".'
+              : 'Esta empresa no tiene sedes cargadas: pídele al cliente el nombre o la dirección de la agencia donde quiere recoger.',
+        }
+      }
       case 'registrar_comprobante':
         return this.registrarComprobante(ctx, args)
       case 'derivar_a_humano':
@@ -1282,6 +1306,26 @@ const TOOLS = [
       description:
         'Últimos pedidos de este cliente (por su número de WhatsApp) con estado, total y enlace de seguimiento.',
       parameters: sinParametros,
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'buscar_sedes',
+      description:
+        'Busca las sedes / agencias (Shalom, Olva…) cargadas por el negocio en la ciudad, provincia o distrito del cliente, con su dirección.',
+      parameters: {
+        type: 'object',
+        properties: {
+          empresa: { type: 'string', description: 'Nombre de la agencia, p. ej. "Shalom".' },
+          lugar: {
+            type: 'string',
+            description: 'Lo que dijo el cliente: distrito, provincia y/o departamento (p. ej. "Wanchaq Cusco").',
+          },
+        },
+        required: ['empresa', 'lugar'],
+        additionalProperties: false,
+      },
     },
   },
   {

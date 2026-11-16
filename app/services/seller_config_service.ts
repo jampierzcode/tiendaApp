@@ -64,6 +64,18 @@ export interface PreguntaFrecuente {
   activa: boolean
 }
 
+/** Sede de una agencia (Shalom, Olva…) que carga el dueño, a mano o desde Excel. */
+export interface Sede {
+  id: string
+  empresa: string
+  departamento: string
+  provincia: string
+  distrito: string
+  nombre: string
+  direccion: string
+  referencia: string
+}
+
 export interface ConfigVendedor {
   nombre: string
   publico: string
@@ -78,6 +90,7 @@ export interface ConfigVendedor {
   ejemplo: string
   derivarCuando: string[]
   descuentos: string
+  sedes: Sede[]
 }
 
 export const DATOS_SUGERIDOS = [
@@ -106,6 +119,7 @@ export const CONFIG_POR_DEFECTO: ConfigVendedor = {
   ejemplo: '',
   derivarCuando: ['Problema con el pago', 'Devolución o cambio', 'Queja grave'],
   descuentos: '',
+  sedes: [],
 }
 
 const texto = (v: unknown, max: number) => String(v ?? '').trim().slice(0, max)
@@ -189,6 +203,19 @@ export default class SellerConfigService {
         ? lista(c.derivarCuando, 20, 120)
         : d.derivarCuando,
       descuentos: texto(c.descuentos, 600),
+      sedes: (Array.isArray(c.sedes) ? c.sedes : [])
+        .slice(0, 3000)
+        .map((x: any) => ({
+          id: id(x?.id),
+          empresa: texto(x?.empresa, 60) || 'Agencia',
+          departamento: texto(x?.departamento, 60),
+          provincia: texto(x?.provincia, 60),
+          distrito: texto(x?.distrito, 60),
+          nombre: texto(x?.nombre, 120),
+          direccion: texto(x?.direccion, 250),
+          referencia: texto(x?.referencia, 200),
+        }))
+        .filter((x: Sede) => x.direccion || x.nombre),
     }
   }
 
@@ -333,10 +360,61 @@ export default class SellerConfigService {
     return 'Adelantado (paga todo antes del envío)'
   }
 
+  /** Empresas con sedes cargadas y cuántas tiene cada una. */
+  static empresasConSedes(business: Business) {
+    const conteo = new Map<string, number>()
+    for (const s of this.config(business).sedes) {
+      const k = normalizar(s.empresa)
+      conteo.set(k, (conteo.get(k) ?? 0) + 1)
+    }
+    return conteo
+  }
+
+  /**
+   * Sedes de una empresa en el lugar que dijo el cliente (departamento,
+   * provincia, distrito o parte del nombre). Sin tildes ni mayúsculas.
+   */
+  static buscarSedes(business: Business, empresa: string, lugar: string) {
+    const sedes = this.config(business).sedes
+    const e = normalizar(empresa)
+    const deEmpresa = sedes.filter((s) => {
+      const n = normalizar(s.empresa)
+      return !e || n.includes(e) || e.includes(n)
+    })
+    const palabras = normalizar(lugar)
+      .split(/[\s,]+/)
+      .filter((p) => p.length >= 3)
+    if (!palabras.length) return { total: deEmpresa.length, sedes: [] as Sede[] }
+    const puntaje = (s: Sede) => {
+      let p = 0
+      const campos = [
+        [normalizar(s.distrito), 4],
+        [normalizar(s.provincia), 3],
+        [normalizar(s.departamento), 2],
+        [normalizar(`${s.nombre} ${s.direccion}`), 1],
+      ] as const
+      for (const w of palabras) {
+        for (const [c, peso] of campos) {
+          if (c && (c === w || c.includes(w))) {
+            p += peso
+            break
+          }
+        }
+      }
+      return p
+    }
+    const hallados = deEmpresa
+      .map((s) => ({ s, p: puntaje(s) }))
+      .filter((x) => x.p > 0)
+      .sort((a, b) => b.p - a.p)
+    return { total: deEmpresa.length, sedes: hallados.slice(0, 10).map((x) => x.s) }
+  }
+
   /** Bloque de texto para el prompt del vendedor. */
   static textoEnvios(business: Business, ahora: DateTime) {
     const simbolo = business.currencySymbol || 'S/'
     const dias = ['', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom']
+    const sedes = this.empresasConSedes(business)
     return this.activas(business)
       .map((z) => {
         const tipos = z.tipos
@@ -365,6 +443,9 @@ export default class SellerConfigService {
               `    Pago: ${this.textoPago(t, simbolo)}`,
               t.direccion && `    Dirección (${t.clase === 'recojo' ? 'punto de recojo' : 'agencia'}): ${t.direccion}`,
               t.datos.length && `    Datos que DEBES pedir: ${t.datos.join(', ')}`,
+              t.clase === 'agencia' &&
+                sedes.has(normalizar(t.nombre)) &&
+                `    Sedes: hay ${sedes.get(normalizar(t.nombre))} sedes de ${t.nombre} cargadas. Cuando el cliente diga su ciudad, usa "buscar_sedes" (empresa: "${t.nombre}") y muéstrale las opciones numeradas con su dirección para que elija.`,
               t.reglas && `    Reglas: ${t.reglas}`,
             ]
               .filter(Boolean)
