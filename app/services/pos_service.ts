@@ -110,6 +110,7 @@ export default class PosService {
     const faltantes: string[] = []
     for (const variation of variations) {
       const pedida = cantidades.get(variation.id)!.cantidad
+      if (productoPorId.get(variation.productId)?.unlimitedStock) continue
       if (variation.stock < pedida) {
         const producto = productoPorId.get(variation.productId)
         faltantes.push(

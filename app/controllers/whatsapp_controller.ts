@@ -3,6 +3,7 @@ import WhatsappMessage from '#models/whatsapp_message'
 import WhatsappOutbox from '#models/whatsapp_outbox'
 import WhatsappSession from '#models/whatsapp_session'
 import NotificationService, { EVENTOS } from '#services/notification_service'
+import SellerConfigService, { DATOS_SUGERIDOS } from '#services/seller_config_service'
 import SalesAgentService from '#services/sales_agent_service'
 import WhatsappAgentPause from '#models/whatsapp_agent_pause'
 import logger from '@adonisjs/core/services/logger'
@@ -70,6 +71,44 @@ export class WhatsappPanelController {
     }
     await business.save()
     return { status: 'success', message: 'Asistente actualizado' }
+  }
+
+  /** Configuración del vendedor IA: personalidad, saludo, FAQ y envíos. */
+  public async sellerConfig({ business }: HttpContext) {
+    return {
+      status: 'success',
+      data: {
+        enabled: business.aiAgentEnabled,
+        available: SalesAgentService.disponible(),
+        instructions: business.aiAgentInstructions ?? '',
+        config: SellerConfigService.config(business),
+        zonas: SellerConfigService.zonas(business),
+        datosSugeridos: DATOS_SUGERIDOS,
+        currencySymbol: business.currencySymbol || 'S/',
+        businessName: business.name,
+        isRestaurant: business.esRestaurante,
+      },
+    }
+  }
+
+  public async saveSellerConfig({ business, request }: HttpContext) {
+    const config = request.input('config')
+    if (config && typeof config === 'object') {
+      business.aiAgentConfig = JSON.stringify(SellerConfigService.limpiarConfig(config))
+    }
+    const zonas = request.input('zonas')
+    if (Array.isArray(zonas)) {
+      business.shippingZones = JSON.stringify(SellerConfigService.limpiarZonas(zonas))
+    }
+    await business.save()
+    return {
+      status: 'success',
+      message: 'Vendedor actualizado',
+      data: {
+        config: SellerConfigService.config(business),
+        zonas: SellerConfigService.zonas(business),
+      },
+    }
   }
 
   /** Devuelve la conversación al asistente antes de que venza la pausa. */

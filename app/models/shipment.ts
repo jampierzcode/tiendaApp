@@ -3,7 +3,13 @@ import { BaseModel, column, hasMany } from '@adonisjs/lucid/orm'
 import type { HasMany } from '@adonisjs/lucid/types/relations'
 import ShipmentEvent from '#models/shipment_event'
 
-export type EstadoEnvio = 'preparando' | 'en_transito' | 'entregado' | 'incidencia' | 'cancelado'
+export type EstadoEnvio =
+  | 'preparando'
+  | 'en_transito'
+  | 'en_agencia'
+  | 'entregado'
+  | 'incidencia'
+  | 'cancelado'
 
 /**
  * Seguimiento de un envío: `compra` (llega del proveedor) o `pedido` (sale
@@ -34,6 +40,14 @@ export default class Shipment extends BaseModel {
 
   @column()
   declare trackingUrl: string | null
+
+  /** Clave que pide la agencia (Shalom) para entregar el paquete. */
+  @column()
+  declare pickupKey: string | null
+
+  /** Agencia de destino donde recoge el comprador (nombre y dirección). */
+  @column()
+  declare agency: string | null
 
   @column()
   declare status: EstadoEnvio

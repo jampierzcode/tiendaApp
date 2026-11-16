@@ -51,6 +51,8 @@ import SuppliersController from '#controllers/suppliers_controller'
 import PurchasesController from '#controllers/purchases_controller'
 import PriceReviewsController from '#controllers/price_reviews_controller'
 import ShipmentsController from '#controllers/shipments_controller'
+import PaymentProofsController from '#controllers/payment_proofs_controller'
+import ProductGalleryController from '#controllers/product_gallery_controller'
 import ReportsController from '#controllers/reports_controller'
 import ModifierGroupsController from '#controllers/modifier_groups_controller'
 import IngredientsController from '#controllers/ingredients_controller'
@@ -191,6 +193,11 @@ router
     router.post('/users/:id/reset-password', [UsersController, 'resetPassword'])
     router.delete('/users/:id', [UsersController, 'destroy']).as('users.destroy')
 
+    router.get('/ai-usage', async () => ({
+      status: 'success',
+      data: await (await import('#services/ai_usage_service')).default.resumen(),
+    }))
+
     router.get('/roles', [RolesController, 'index']).as('roles.index')
     router.get('/roles/:id', [RolesController, 'show']).as('roles.show')
     router.post('/roles', [RolesController, 'store']).as('roles.store')
@@ -267,6 +274,8 @@ router
     router.post('/whatsapp/disconnect', [WhatsappPanelController, 'disconnect'])
     router.put('/whatsapp/templates', [WhatsappPanelController, 'saveTemplates'])
     router.put('/whatsapp/agent', [WhatsappPanelController, 'saveAgent'])
+    router.get('/seller-config', [WhatsappPanelController, 'sellerConfig'])
+    router.put('/seller-config', [WhatsappPanelController, 'saveSellerConfig'])
     router.post('/whatsapp/conversations/:contact/resume-agent', [WhatsappPanelController, 'resumeAgent'])
     router.get('/whatsapp/unread', [WhatsappPanelController, 'unread'])
     router.get('/whatsapp/conversations', [WhatsappPanelController, 'conversations'])
@@ -365,6 +374,11 @@ router
     router.post('/products/:id/price', [PriceReviewsController, 'apply'])
 
     // Envíos propios y de compras
+    router.get('/products/:id/gallery', [ProductGalleryController, 'show'])
+    router.put('/products/:id/gallery', [ProductGalleryController, 'update'])
+    router.get('/payment-proofs', [PaymentProofsController, 'index'])
+    router.post('/payment-proofs/:id/validate', [PaymentProofsController, 'validate'])
+    router.post('/payment-proofs/:id/reject', [PaymentProofsController, 'reject'])
     router.get('/shipments', [ShipmentsController, 'index'])
     router.get('/shipments/:id', [ShipmentsController, 'show'])
     router.post('/shipments', [ShipmentsController, 'store'])

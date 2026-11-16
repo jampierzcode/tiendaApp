@@ -89,7 +89,15 @@ export default class OrderService {
     }
   }
 
-  static async crearDesdeTienda(business: Business, datos: DatosPedido) {
+  /**
+   * `ajustes.envio` fija el costo de envío (lo calcula el vendedor IA con la
+   * zona y el tipo de entrega elegidos); sin él se usa el envío general.
+   */
+  static async crearDesdeTienda(
+    business: Business,
+    datos: DatosPedido,
+    ajustes: { envio?: number | null } = {}
+  ) {
     if (!datos.items?.length) {
       throw new OrderError('El carrito está vacío')
     }
@@ -143,6 +151,7 @@ export default class OrderService {
     const faltantes: string[] = []
     for (const variation of variations) {
       const pedida = cantidades.get(variation.id)!
+      if (productoPorId.get(variation.productId)?.unlimitedStock) continue
       if (variation.stock < pedida) {
         const producto = productoPorId.get(variation.productId)
         faltantes.push(
@@ -232,7 +241,10 @@ export default class OrderService {
       }
       if (cupon) creado.couponCode = cupon.code
 
-      const envio = this.calcularEnvio(business, subtotal - descuentoTotal, metodo)
+      const envio =
+        ajustes.envio !== undefined && ajustes.envio !== null
+          ? PricingService.redondear(Math.max(0, Number(ajustes.envio)))
+          : this.calcularEnvio(business, subtotal - descuentoTotal, metodo)
 
       creado.subtotal = PricingService.redondear(subtotal)
       creado.discountTotal = PricingService.redondear(descuentoTotal)
@@ -264,7 +276,7 @@ export default class OrderService {
   static async crearDesdeMenu(
     business: Business,
     datos: DatosPedidoMenu,
-    ajustes: { avisarCliente?: boolean } = {}
+    ajustes: { avisarCliente?: boolean; envio?: number | null } = {}
   ) {
     if (!datos.items?.length) throw new OrderError('El carrito está vacío')
 
@@ -456,7 +468,10 @@ export default class OrderService {
 
       if (cupon) creado.couponCode = cupon.code
 
-      const envio = this.calcularEnvio(business, subtotal - descuentoTotal, metodo)
+      const envio =
+        ajustes.envio !== undefined && ajustes.envio !== null
+          ? PricingService.redondear(Math.max(0, Number(ajustes.envio)))
+          : this.calcularEnvio(business, subtotal - descuentoTotal, metodo)
 
       creado.subtotal = PricingService.redondear(subtotal)
       creado.discountTotal = PricingService.redondear(descuentoTotal)

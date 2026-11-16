@@ -87,6 +87,20 @@ export default class NotificationService {
     })
   }
 
+  /** Aviso con texto propio (envíos, pagos…), solo si el WhatsApp está conectado. */
+  static async avisoLibre(business: Business, order: Order, evento: string, cuerpo: string) {
+    if (!order.customerPhone) return
+    const sesion = await WhatsappSession.query().where('business_id', business.id).first()
+    if (!sesion || sesion.desired !== 'connected') return
+    await this.encolar(business, {
+      orderId: order.id,
+      phone: order.customerPhone,
+      event: evento,
+      body: cuerpo,
+      automatic: true,
+    })
+  }
+
   /** Encola el envío y lo deja anotado en la conversación del cliente. */
   static async encolar(
     business: Business,

@@ -236,6 +236,7 @@ export default class ProductsController {
           lowStockThreshold: data.low_stock_threshold ?? 5,
           businessImageId: data.business_image_id ?? null,
           status: data.status === 'inactivo' ? 'inactivo' : 'activo',
+          unlimitedStock: Boolean(request.input('unlimited_stock', false)),
           stock: 0,
         },
         { client: trx }
@@ -588,6 +589,10 @@ export default class ProductsController {
       lowStockThreshold: data.low_stock_threshold ?? product.lowStockThreshold,
       businessImageId: data.business_image_id ?? product.businessImageId,
       status: data.status ?? product.status,
+      unlimitedStock:
+        request.input('unlimited_stock') === undefined
+          ? product.unlimitedStock
+          : Boolean(request.input('unlimited_stock')),
     })
 
     try {

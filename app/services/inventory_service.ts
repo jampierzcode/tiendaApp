@@ -61,7 +61,19 @@ export default class InventoryService {
       // el saldo inicial sí pueden fijar cualquier valor, porque son
       // correcciones explícitas del operador.
       const isCorrection = input.type === 'ajuste' || input.type === 'inicial'
-      if (balanceAfter < 0 && !isCorrection) {
+      // Un producto con stock ilimitado vende igual: el kardex registra la
+      // salida pero no se bloquea por falta de saldo.
+      const ilimitado =
+        balanceAfter < 0 &&
+        !isCorrection &&
+        Boolean(
+          await trx
+            .from('products')
+            .where('id', variation.productId)
+            .andWhere('unlimited_stock', true)
+            .first()
+        )
+      if (balanceAfter < 0 && !isCorrection && !ilimitado) {
         throw new InsufficientStockError(variation.stock, Math.abs(input.quantity))
       }
 
@@ -166,6 +178,7 @@ export default class InventoryService {
            COALESCE(product_variations.low_stock_threshold, products.low_stock_threshold)`
       )
       .where('products.status', 'activo')
+      .where('products.unlimited_stock', false)
       .whereRaw(`NOT ${VARIATION_RETIRADA}`)
       .preload('product')
       .preload('attributes', (q) => q.preload('value'))

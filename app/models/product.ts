@@ -6,6 +6,7 @@ import BusinessImage from './business_image.js'
 import ProductVariation from './product_variation.js'
 import CategoryProduct from './category_product.js'
 import Tag from './tag.js'
+import ProductImage from './product_image.js'
 
 export default class Product extends BaseModel {
   @column({ isPrimary: true })
@@ -50,6 +51,10 @@ export default class Product extends BaseModel {
   @column()
   declare lowStockThreshold: number
 
+  /** Se vende sin mirar el inventario: nunca se agota. */
+  @column()
+  declare unlimitedStock: boolean
+
   @column()
   declare businessImageId: number | null
 
@@ -70,6 +75,10 @@ export default class Product extends BaseModel {
 
   @belongsTo(() => BusinessImage)
   declare businessImages: BelongsTo<typeof BusinessImage>
+
+  /** Galería completa (del producto y de sus variaciones), en orden. */
+  @hasMany(() => ProductImage)
+  declare gallery: HasMany<typeof ProductImage>
 
   @hasMany(() => CategoryProduct)
   declare categoryLinks: HasMany<typeof CategoryProduct>

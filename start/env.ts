@@ -56,6 +56,13 @@ export default await Env.create(new URL('../', import.meta.url), {
   OPENAI_API_KEY: Env.schema.string.optional(),
   OPENAI_MODEL: Env.schema.string.optional(),
   OPENAI_BASE_URL: Env.schema.string.optional(),
+  /** Admin key de OpenAI (solo lectura de costos reales en el superadmin). */
+  OPENAI_ADMIN_KEY: Env.schema.string.optional(),
+  /** Presupuesto mensual de IA en USD: el superadmin avisa al acercarse. */
+  AI_MONTHLY_BUDGET_USD: Env.schema.string.optional(),
+  AI_PRICE_INPUT: Env.schema.string.optional(),
+  AI_PRICE_CACHED: Env.schema.string.optional(),
+  AI_PRICE_OUTPUT: Env.schema.string.optional(),
   /** Minutos que el asistente calla con un cliente cuando el dueño le escribe a mano. */
   AI_AGENT_HUMAN_PAUSE_MIN: Env.schema.number.optional(),
   /** Claves VAPID de los avisos push; sin ellas los avisos del navegador quedan apagados. */

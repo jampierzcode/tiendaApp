@@ -39,6 +39,8 @@ export default class ShipmentsController {
           carrier: request.input('carrier'),
           trackingCode: request.input('trackingCode'),
           trackingUrl: request.input('trackingUrl'),
+          pickupKey: request.input('pickupKey'),
+          agency: request.input('agency'),
           estimatedAt: request.input('estimatedAt'),
           note: request.input('note'),
         },
@@ -59,6 +61,8 @@ export default class ShipmentsController {
         carrier: request.input('carrier'),
         trackingCode: request.input('trackingCode'),
         trackingUrl: request.input('trackingUrl'),
+        pickupKey: request.input('pickupKey'),
+        agency: request.input('agency'),
         estimatedAt: request.input('estimatedAt'),
         note: request.input('note'),
       })

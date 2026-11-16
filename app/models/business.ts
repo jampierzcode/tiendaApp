@@ -129,6 +129,14 @@ export default class Business extends BaseModel {
   @column()
   declare aiAgentInstructions: string | null
 
+  /** JSON: personalidad, saludo, preguntas frecuentes… (ver SellerConfigService). */
+  @column()
+  declare aiAgentConfig: string | null
+
+  /** JSON: zonas de envío con sus tipos de entrega (ver SellerConfigService). */
+  @column()
+  declare shippingZones: string | null
+
   // --- Suscripción ---
 
   /** 'trial' (prueba gratis), 'active' (pagando) o 'expired'. */

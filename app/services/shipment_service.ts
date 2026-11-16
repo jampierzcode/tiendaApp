@@ -3,12 +3,21 @@ import Order from '#models/order'
 import PurchaseOrder from '#models/purchase_order'
 import Shipment, { type EstadoEnvio } from '#models/shipment'
 import ShipmentEvent from '#models/shipment_event'
+import NotificationService from '#services/notification_service'
+import logger from '@adonisjs/core/services/logger'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
 
 export class ShipmentError extends Error {}
 
-const ESTADOS: EstadoEnvio[] = ['preparando', 'en_transito', 'entregado', 'incidencia', 'cancelado']
+const ESTADOS: EstadoEnvio[] = [
+  'preparando',
+  'en_transito',
+  'en_agencia',
+  'entregado',
+  'incidencia',
+  'cancelado',
+]
 const TERMINALES: EstadoEnvio[] = ['entregado', 'cancelado']
 
 /**
@@ -27,10 +36,12 @@ export default class ShipmentService {
       carrier?: string | null
       trackingCode?: string | null
       trackingUrl?: string | null
+      pickupKey?: string | null
+      agency?: string | null
       estimatedAt?: string | null
       note?: string | null
     },
-    userId: number
+    userId: number | null
   ) {
     if (datos.kind === 'compra') {
       if (!datos.purchaseOrderId) throw new ShipmentError('Indica la orden de compra')
@@ -68,6 +79,8 @@ export default class ShipmentService {
           carrier: datos.carrier?.trim() || null,
           trackingCode: datos.trackingCode?.trim() || null,
           trackingUrl: url,
+          pickupKey: datos.pickupKey?.trim().slice(0, 40) || null,
+          agency: datos.agency?.trim().slice(0, 300) || null,
           estimatedAt: datos.estimatedAt || null,
           note: datos.note ?? null,
           status: 'preparando',
@@ -99,6 +112,8 @@ export default class ShipmentService {
       carrier?: string | null
       trackingCode?: string | null
       trackingUrl?: string | null
+      pickupKey?: string | null
+      agency?: string | null
       estimatedAt?: string | null
       note?: string | null
     }
@@ -113,12 +128,61 @@ export default class ShipmentService {
       envio.trackingUrl = url
     }
     if (datos.carrier !== undefined) envio.carrier = datos.carrier?.trim() || null
+    const guiaNueva =
+      datos.trackingCode !== undefined &&
+      Boolean(datos.trackingCode?.trim()) &&
+      datos.trackingCode?.trim() !== envio.trackingCode
     if (datos.trackingCode !== undefined) envio.trackingCode = datos.trackingCode?.trim() || null
+    if (datos.pickupKey !== undefined) envio.pickupKey = datos.pickupKey?.trim().slice(0, 40) || null
+    if (datos.agency !== undefined) envio.agency = datos.agency?.trim().slice(0, 300) || null
     if (datos.estimatedAt !== undefined) envio.estimatedAt = datos.estimatedAt || null
     if (datos.note !== undefined) envio.note = datos.note
 
     await envio.save()
+    // Si ya salió y recién se anota la guía, el comprador la recibe por WhatsApp.
+    if (guiaNueva && ['en_transito', 'en_agencia'].includes(envio.status)) {
+      await this.avisar(business, envio)
+    }
     return envio
+  }
+
+  /**
+   * Avisa al comprador por WhatsApp (solo envíos de pedidos). Nunca rompe el
+   * cambio de estado: si el bot no está conectado, simplemente no sale.
+   */
+  static async avisar(business: Business, envio: Shipment, nota?: string | null) {
+    if (envio.kind !== 'pedido' || !envio.orderId) return
+    try {
+      const order = await Order.find(envio.orderId)
+      if (!order) return
+      const texto = this.mensajeComprador(business, order, envio, nota)
+      if (texto) await NotificationService.avisoLibre(business, order, `envio_${envio.status}`, texto)
+    } catch (error) {
+      logger.error({ err: error }, 'No se pudo avisar el envío al comprador')
+    }
+  }
+
+  static mensajeComprador(business: Business, order: Order, envio: Shipment, nota?: string | null) {
+    const quien = envio.carrier || 'la agencia'
+    const datos = [
+      envio.trackingCode && `Guía / código: *${envio.trackingCode}*`,
+      envio.pickupKey && `Clave de recojo: *${envio.pickupKey}*`,
+      envio.agency && `Agencia de destino: ${envio.agency}`,
+      envio.trackingUrl && `Rastreo: ${envio.trackingUrl}`,
+    ]
+      .filter(Boolean)
+      .join('\n')
+    const seguimiento = NotificationService.enlaceSeguimiento(business, order)
+    switch (envio.status) {
+      case 'en_transito':
+        return `📦 ${order.customerName}, tu pedido *${order.code}* ya fue enviado por ${quien}.${datos ? `\n${datos}` : ''}\nSíguelo aquí: ${seguimiento}`
+      case 'en_agencia':
+        return `📍 ¡Tu pedido *${order.code}* ya llegó a ${quien}!${datos ? `\n${datos}` : ''}\nRecógelo con tu DNI${envio.pickupKey ? ' y la clave' : ''}.`
+      case 'incidencia':
+        return `⚠️ Hubo un inconveniente con el envío de tu pedido *${order.code}*${nota ? `: ${nota}` : ''}. Te escribimos para resolverlo.`
+      default:
+        return null
+    }
   }
 
   static async cambiarEstado(
@@ -133,7 +197,7 @@ export default class ShipmentService {
       throw new ShipmentError(`El estado debe ser uno de: ${ESTADOS.join(', ')}`)
     }
 
-    return db.transaction(async (trx) => {
+    const envio = await db.transaction(async (trx) => {
       const envio = await Shipment.query({ client: trx })
         .where('id', id)
         .andWhere('business_id', business.id)
@@ -167,5 +231,8 @@ export default class ShipmentService {
 
       return envio
     })
+
+    await this.avisar(business, envio, nota)
+    return envio
   }
 }

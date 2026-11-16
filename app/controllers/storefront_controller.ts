@@ -1,3 +1,4 @@
+import Shipment from '#models/shipment'
 import { randomBytes } from 'node:crypto'
 import Customer from '#models/customer'
 import OrderImages from '#services/order_images'
@@ -211,9 +212,29 @@ export default class StorefrontController {
 
     const imagenes = await OrderImages.deItems(order.items)
 
+    // La clave de recojo NO se muestra aquí: el código del pedido es
+    // adivinable. Esa va solo por WhatsApp al comprador.
+    const envios = await Shipment.query()
+      .where('business_id', business.id)
+      .andWhere('order_id', order.id)
+      .andWhereNot('status', 'cancelado')
+      .preload('events', (e) => e.orderBy('happened_at', 'asc'))
+      .orderBy('id', 'desc')
+
     return {
       status: 'success',
       data: {
+        shipments: envios.map((e) => ({
+          carrier: e.carrier,
+          trackingCode: e.trackingCode,
+          trackingUrl: e.trackingUrl,
+          agency: e.agency,
+          status: e.status,
+          estimatedAt: e.estimatedAt,
+          shippedAt: e.shippedAt,
+          deliveredAt: e.deliveredAt,
+          events: e.events.map((ev) => ({ status: ev.status, happenedAt: ev.happenedAt })),
+        })),
         code: order.code,
         status: order.status,
         deliveryMethod: order.deliveryMethod,
@@ -601,11 +622,24 @@ export default class StorefrontController {
         v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
         v.preload('businessImage')
       })
+      .preload('gallery', (g) => g.preload('image').orderBy('sort_order', 'asc').orderBy('id', 'asc'))
       .first()
 
     if (!product) {
       return response.notFound({ status: 'error', message: 'Producto no encontrado' })
     }
+
+    // Galería: primero la foto principal y luego las extra, sin repetir.
+    const fotos = (principal: string | null | undefined, variacionId: number | null) => [
+      ...new Set(
+        [
+          principal,
+          ...product.gallery
+            .filter((g) => g.productVariationId === variacionId)
+            .map((g) => g.image?.url),
+        ].filter((u): u is string => Boolean(u))
+      ),
+    ]
 
     const promos = await PromotionService.activas(business.id)
     const categoryIds = product.categoryLinks.map((l) => l.categoryId)
@@ -616,6 +650,7 @@ export default class StorefrontController {
       data: {
         ...this.resumenProducto(product, business, promos),
         description: product.description,
+        images: fotos(product.businessImages?.url, null),
         categorias: product.categoryLinks.map((l) => ({
           category: { name: l.category.name, slug: l.category.slug },
           subcategory: l.subcategory
@@ -635,12 +670,14 @@ export default class StorefrontController {
             id: v.id,
             sku: v.sku,
             isDefault: v.isDefault,
-            stock: v.stock,
-            disponible: v.stock > 0,
+            // Stock ilimitado: un tope alto para que el carrito no limite la cantidad.
+            stock: product.unlimitedStock ? 999 : v.stock,
+            disponible: product.unlimitedStock || v.stock > 0,
             // Si la variación no tiene foto propia, la tienda cae en la del
             // producto: así el beige y el negro se ven distintos, pero la S y
             // la M del mismo color no obligan a subir la misma foto dos veces.
             imageUrl: v.businessImage?.url ?? null,
+            images: fotos(v.businessImage?.url, v.id),
             price: precioVariacion.final,
             originalPrice: precioVariacion.descuento > 0 ? precioVariacion.original : null,
             label: OrderService.etiquetaVariacion(v),
@@ -856,7 +893,9 @@ export default class StorefrontController {
     for (const e of [...base.etiquetas, ...precios.flatMap((x) => x.p.etiquetas)]) vistas.set(e.id, e)
     const etiquetas = [...vistas.values()]
 
-    const stockTotal = (product.variations ?? []).reduce((total, v) => total + v.stock, 0)
+    const stockTotal = product.unlimitedStock
+      ? 999
+      : (product.variations ?? []).reduce((total, v) => total + v.stock, 0)
 
     // Colores disponibles: es el dato que más se mira en una grilla de ropa.
     const colores = new Map<number, { value: string; hexColor: string | null }>()

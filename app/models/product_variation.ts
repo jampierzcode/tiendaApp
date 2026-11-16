@@ -3,6 +3,7 @@ import BusinessImage from '#models/business_image'
 import Product from '#models/product'
 import ProductVariationAttribute from '#models/product_variation_attribute'
 import StockMovement from '#models/stock_movement'
+import ProductImage from '#models/product_image'
 import type { HasMany, BelongsTo } from '@adonisjs/lucid/types/relations'
 
 export default class ProductVariation extends BaseModel {
@@ -59,6 +60,10 @@ export default class ProductVariation extends BaseModel {
 
   @belongsTo(() => Product)
   declare product: BelongsTo<typeof Product>
+
+  /** Fotos extra de esta variación (además de su foto principal). */
+  @hasMany(() => ProductImage, { foreignKey: 'productVariationId' })
+  declare gallery: HasMany<typeof ProductImage>
 
   @hasMany(() => ProductVariationAttribute, { foreignKey: 'variationId' })
   declare attributes: HasMany<typeof ProductVariationAttribute>
