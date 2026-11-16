@@ -63,7 +63,7 @@ export default class StorefrontController {
         country: business.country,
         businessType: business.businessType,
         paymentPolicy: business.paymentPolicy,
-        paymentInstructions: business.paymentInstructions,
+        paymentInstructions: PaymentMethodService.textoParaCliente(business),
         name: business.name,
         description: business.description,
         logoUrl: business.logoUrl,
@@ -244,7 +244,7 @@ export default class StorefrontController {
         total: Number(order.total),
         paidTotal: Number(order.paidTotal),
         paymentPolicy: business.paymentPolicy,
-        paymentInstructions: business.paymentInstructions,
+        paymentInstructions: PaymentMethodService.textoParaCliente(business),
         paymentMethods: PaymentMethodService.activos(business).map((m) => ({
           nombre: m.nombre,
           tipo: m.tipo,

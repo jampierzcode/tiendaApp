@@ -15,17 +15,21 @@ export default class PaymentMethodsController {
     return {
       status: 'success',
       data: PaymentMethodsController.servir(PaymentMethodService.todos(business)),
+      // Texto libre de antes (Mi tienda → General), para pasarlo a un método o borrarlo.
+      legacyInstructions: business.paymentInstructions,
     }
   }
 
   public async update({ business, request }: HttpContext) {
     const lista = await PaymentMethodService.limpiar(business, request.input('methods'))
     business.paymentMethods = JSON.stringify(lista)
+    if (request.input('clearLegacy') === true) business.paymentInstructions = null
     await business.save()
     return {
       status: 'success',
       message: 'Métodos de pago guardados',
       data: PaymentMethodsController.servir(lista),
+      legacyInstructions: business.paymentInstructions,
     }
   }
 }

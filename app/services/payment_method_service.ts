@@ -85,6 +85,31 @@ export default class PaymentMethodService {
       .filter((m) => m.nombre)
   }
 
+  /**
+   * Lo que ve el cliente como «cómo pagar» (carta, carrito, seguimiento):
+   * si hay métodos activos se arma con ellos; si no, el texto libre antiguo.
+   */
+  static textoParaCliente(business: Business): string | null {
+    const activos = this.activos(business)
+    if (!activos.length) return business.paymentInstructions?.trim() || null
+    return activos
+      .map((m) =>
+        [
+          m.nombre,
+          [m.numero, m.cci && `CCI ${m.cci}`].filter(Boolean).join(' · '),
+          m.titular && `(${m.titular})`,
+        ]
+          .filter(Boolean)
+          .join(' ')
+      )
+      .join('\n')
+  }
+
+  /** Texto libre antiguo, solo si no hay métodos activos (si los hay, manda la lista). */
+  static textoLibre(business: Business) {
+    return this.activos(business).length ? null : business.paymentInstructions?.trim() || null
+  }
+
   /** Para el prompt del vendedor. */
   static texto(business: Business) {
     return this.activos(business)

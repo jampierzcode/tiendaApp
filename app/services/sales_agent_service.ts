@@ -390,7 +390,7 @@ export default class SalesAgentService {
         `Envío a domicilio: ${envio}. También se puede recoger en el local${restaurante ? ' o pedir en mesa' : ''}.`,
       !conZonas && `Pago: ${politica}`,
       metodosPago && `Métodos de pago (los únicos válidos; nunca des otro número ni el WhatsApp de la tienda para pagar):\n${metodosPago}`,
-      business.paymentInstructions && `Cómo pagar: ${business.paymentInstructions}`,
+      PaymentMethodService.textoLibre(business) && `Cómo pagar: ${PaymentMethodService.textoLibre(business)}`,
       categorias.length && `Categorías: ${categorias.map((c) => c.name).join(', ')}`,
       !business.puedeVender &&
         'IMPORTANTE: ahora mismo el negocio NO está recibiendo pedidos. Informa y no crees pedidos.',
@@ -1084,12 +1084,12 @@ FORMATO (WhatsApp, no Markdown)
             }
           : {}),
         pago: entrega.tipo
-          ? `${SellerConfigService.textoPago(entrega.tipo, simbolo)}. ${business.paymentInstructions ?? ''}`.trim()
+          ? `${SellerConfigService.textoPago(entrega.tipo, simbolo)}. ${PaymentMethodService.textoParaCliente(business) ?? ''}`.trim()
           : business.paymentPolicy === 'on_confirm'
-            ? `Por adelantado. ${business.paymentInstructions ?? 'Coordina el pago con el negocio.'}`
+            ? `Por adelantado. ${PaymentMethodService.textoParaCliente(business) ?? 'Coordina el pago con el negocio.'}`
             : business.paymentPolicy === 'on_delivery'
               ? 'Contra entrega.'
-              : business.paymentInstructions || 'Se coordina con el negocio.',
+              : PaymentMethodService.textoParaCliente(business) || 'Se coordina con el negocio.',
       }
     } catch (error) {
       if (error instanceof OrderError) return { creado: false, error: error.message }
