@@ -23,6 +23,7 @@ export default class PosController {
     const categoryId = Number(request.input('categoryId')) || null
     const subcategoryId = Number(request.input('subcategoryId')) || null
     const soloPromo = ['1', 'true'].includes(String(request.input('promo', '')))
+    const promoId = Number(request.input('promoId')) || null
     const pagina = Math.max(1, Number(request.input('page', 1)) || 1)
     const porPagina = Math.min(60, Math.max(6, Number(request.input('perPage', 24)) || 24))
 
@@ -54,6 +55,10 @@ export default class PosController {
 
     const productos = await q
     const promos = await PromotionService.activas(business.id)
+    // Todas las promociones automáticas vigentes (descuento, 2x1, por categoría…);
+    // los cupones no, porque necesitan un código.
+    const automaticas = promos.filter((d) => !d.code)
+    const laPromo = promoId ? automaticas.find((d) => d.id === promoId) : null
 
     const todos = productos
       .map((p) => {
@@ -97,11 +102,30 @@ export default class PosController {
       })
       .filter((p) => p.variations.length > 0)
       .filter((p) => !soloPromo || p.promo)
+      .filter((p) => {
+        if (!promoId) return true
+        if (!laPromo) return false
+        const prod = productos.find((x) => x.id === p.id)!
+        const cats = prod.categoryLinks.map((l) => l.categoryId)
+        return (
+          PromotionService.aplicaA(laPromo, p.id, cats) ||
+          p.variations.some((v) => PromotionService.aplicaA(laPromo, p.id, cats, v.id))
+        )
+      })
 
     return {
       status: 'success',
       data: todos.slice((pagina - 1) * porPagina, pagina * porPagina),
-      meta: { total: todos.length, page: pagina, perPage: porPagina },
+      meta: {
+        total: todos.length,
+        page: pagina,
+        perPage: porPagina,
+        promociones: automaticas.map((d) => ({
+          id: d.id,
+          name: d.name,
+          label: PromotionService.etiqueta(d, business.currencySymbol || 'S/'),
+        })),
+      },
     }
   }
 
