@@ -3,6 +3,9 @@ import WhatsappMessage from '#models/whatsapp_message'
 import WhatsappOutbox from '#models/whatsapp_outbox'
 import WhatsappSession from '#models/whatsapp_session'
 import NotificationService, { EVENTOS } from '#services/notification_service'
+import SalesAgentService from '#services/sales_agent_service'
+import WhatsappAgentPause from '#models/whatsapp_agent_pause'
+import logger from '@adonisjs/core/services/logger'
 import Business from '#models/business'
 import env from '#start/env'
 import db from '@adonisjs/lucid/services/db'
@@ -16,7 +19,11 @@ export class WhatsappPanelController {
   private async sesion(businessId: number) {
     return (
       (await WhatsappSession.query().where('business_id', businessId).first()) ??
-      (await WhatsappSession.create({ businessId, desired: 'disconnected', status: 'disconnected' }))
+      (await WhatsappSession.create({
+        businessId,
+        desired: 'disconnected',
+        status: 'disconnected',
+      }))
     )
   }
 
@@ -42,8 +49,33 @@ export class WhatsappPanelController {
           EVENTOS.map((e) => [e, NotificationService.plantillaDe(business, e)])
         ),
         defaults: NotificationService.plantillasPorDefecto(),
+        agent: {
+          enabled: business.aiAgentEnabled,
+          instructions: business.aiAgentInstructions ?? '',
+          // Sin OPENAI_API_KEY en el servidor el asistente no puede funcionar.
+          available: SalesAgentService.disponible(),
+          pauseMinutes: SalesAgentService.pausaHumanoMin(),
+        },
       },
     }
+  }
+
+  /** Enciende/apaga el asistente con IA y guarda lo que debe saber del negocio. */
+  public async saveAgent({ business, request }: HttpContext) {
+    const enabled = request.input('enabled')
+    if (typeof enabled === 'boolean') business.aiAgentEnabled = enabled
+    const instrucciones = request.input('instructions')
+    if (typeof instrucciones === 'string') {
+      business.aiAgentInstructions = instrucciones.trim().slice(0, 4000) || null
+    }
+    await business.save()
+    return { status: 'success', message: 'Asistente actualizado' }
+  }
+
+  /** Devuelve la conversación al asistente antes de que venza la pausa. */
+  public async resumeAgent({ business, params }: HttpContext) {
+    await SalesAgentService.reanudar(business.id, params.contact)
+    return { status: 'success', message: 'El asistente vuelve a responder a este cliente' }
   }
 
   public async connect({ business }: HttpContext) {
@@ -72,7 +104,9 @@ export class WhatsappPanelController {
       .select('contact')
       .max('id as lastId')
       .count('* as total')
-      .select(db.raw("sum(case when direction = 'in' and read_at is null then 1 else 0 end) as unread"))
+      .select(
+        db.raw("sum(case when direction = 'in' and read_at is null then 1 else 0 end) as unread")
+      )
       .orderBy('lastId', 'desc')
       .limit(100)
 
@@ -93,11 +127,17 @@ export class WhatsappPanelController {
       if (k && !nombre.has(k)) nombre.set(k, o.customerName)
     }
 
+    const pausas = await WhatsappAgentPause.query()
+      .where('business_id', business.id)
+      .andWhere('paused_until', '>', DateTime.now().toSQL()!)
+    const pausado = new Set(pausas.map((p) => p.contact))
+
     return {
       status: 'success',
       data: filas.map((f) => {
         const u = porId.get(f.lastId)
         return {
+          agentPaused: pausado.has(f.contact),
           contact: f.contact,
           phone: u?.phone ?? f.contact,
           name: nombre.get(f.contact) ?? null,
@@ -129,7 +169,9 @@ export class WhatsappPanelController {
   }
 
   public async send({ business, params, request, response }: HttpContext) {
-    const texto = String(request.input('text') ?? '').trim().slice(0, 1000)
+    const texto = String(request.input('text') ?? '')
+      .trim()
+      .slice(0, 1000)
     if (!texto) return response.badRequest({ status: 'error', message: 'Escribe un mensaje' })
 
     const ultimo = await WhatsappMessage.query()
@@ -139,11 +181,15 @@ export class WhatsappPanelController {
       .first()
     // Sin historial aún (p. ej. desde un pedido): se usa el teléfono del pedido.
     const destino = ultimo?.phone ?? String(request.input('phone') ?? '').replace(/\D/g, '')
-    if (!destino) return response.notFound({ status: 'error', message: 'Conversación no encontrada' })
+    if (!destino)
+      return response.notFound({ status: 'error', message: 'Conversación no encontrada' })
 
     const sesion = await WhatsappSession.query().where('business_id', business.id).first()
     if (!sesion || sesion.desired !== 'connected') {
-      return response.badRequest({ status: 'error', message: 'Conecta el WhatsApp del negocio primero' })
+      return response.badRequest({
+        status: 'error',
+        message: 'Conecta el WhatsApp del negocio primero',
+      })
     }
 
     await NotificationService.encolar(business, {
@@ -152,6 +198,13 @@ export class WhatsappPanelController {
       body: texto,
       automatic: false,
     })
+    // El dueño tomó la conversación: el asistente no se le cruza.
+    await SalesAgentService.pausar(
+      business.id,
+      destino,
+      SalesAgentService.pausaHumanoMin(),
+      'El negocio respondió desde el panel'
+    )
     return { status: 'success', message: 'Enviando…' }
   }
 
@@ -239,7 +292,7 @@ export default class WhatsappBotController {
     const { status, qr, connectedPhone } = request.only(['status', 'qr', 'connectedPhone'])
     sesion.merge({
       status: status ?? sesion.status,
-      qr: status === 'qr' ? qr ?? null : null,
+      qr: status === 'qr' ? (qr ?? null) : null,
       connectedPhone: connectedPhone ?? (status === 'connected' ? sesion.connectedPhone : null),
     })
     await sesion.save()
@@ -311,46 +364,116 @@ export default class WhatsappBotController {
   }
 
   /**
-   * Mensaje entrante de un cliente. Devuelve la respuesta a enviar, o null si
-   * el bot debe callar (no inventa conversación con quien no la inició).
+   * Mensaje entrante de un cliente. Devuelve la respuesta a enviar (texto y,
+   * si hace falta, fotos), o null si el bot debe callar.
+   *
+   * Con el asistente de IA encendido conversa y vende; si está apagado, sin
+   * clave o falla, quedan las reglas de siempre («menú», «mi pedido»).
    */
   public async inbound(ctx: HttpContext) {
-    const salida: any = await this.inboundInterno(ctx)
-    if (salida?.reply) {
-      const { businessUuid, phone } = ctx.request.only(['businessUuid', 'phone'])
-      const negocio = await Business.findBy('uuid', businessUuid)
-      if (negocio) {
-        await NotificationService.registrar(negocio.id, String(phone ?? ''), 'out', salida.reply, true)
-      }
-    }
-    return salida
-  }
-
-  private async inboundInterno(ctx: HttpContext) {
     if (!this.autorizado(ctx)) return
     const { request, response } = ctx
 
+    const { businessUuid, phone, text, kind } = request.only([
+      'businessUuid',
+      'phone',
+      'text',
+      'kind',
+    ])
+    const business = await Business.findBy('uuid', businessUuid)
+    if (!business) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
+
+    const telefono = String(phone ?? '')
+    let crudo = String(text ?? '')
+      .trim()
+      .slice(0, 2000)
+    // Fotos, audios o stickers llegan sin texto: se describen para el asistente.
+    if (kind && kind !== 'chat' && kind !== 'text') {
+      const tipo: Record<string, string> = {
+        image: 'una imagen (puede ser un comprobante de pago o una foto de referencia)',
+        ptt: 'un audio de voz (no puedes escucharlo: pídele con amabilidad que lo escriba)',
+        audio: 'un audio (no puedes escucharlo: pídele con amabilidad que lo escriba)',
+        video: 'un video',
+        document: 'un documento',
+        sticker: 'un sticker',
+        location: 'su ubicación',
+      }
+      crudo = `[El cliente envió ${tipo[kind] ?? 'un archivo'}]${crudo ? ` ${crudo}` : ''}`
+    }
+    if (!crudo) return { status: 'success', reply: null, media: [] }
+
+    const entrante = await NotificationService.registrar(business.id, telefono, 'in', crudo, false)
+
+    let salida: { reply: string | null; media: { url: string; caption?: string }[] } | null = null
+    try {
+      salida = await SalesAgentService.responder(business, telefono, crudo, entrante.id)
+    } catch (error) {
+      logger.error(
+        { err: error, business: business.id },
+        'El asistente de WhatsApp falló; uso las reglas fijas'
+      )
+    }
+
+    // Conversación tomada por el dueño: ni IA ni reglas.
+    if (!salida && (await SalesAgentService.enPausa(business.id, telefono))) {
+      return { status: 'success', reply: null, media: [] }
+    }
+
+    if (!salida) {
+      const regla = await this.respuestaPorReglas(business, telefono, crudo)
+      salida = { reply: regla, media: [] }
+    }
+
+    for (const m of salida.media) {
+      await NotificationService.registrar(
+        business.id,
+        telefono,
+        'out',
+        `📷 ${m.caption ?? 'Foto'}`,
+        true
+      )
+    }
+    if (salida.reply) {
+      await NotificationService.registrar(business.id, telefono, 'out', salida.reply, true)
+    }
+
+    return { status: 'success', reply: salida.reply, media: salida.media }
+  }
+
+  /**
+   * El dueño escribió desde el propio celular (no desde el panel): se anota
+   * en la conversación y el asistente se aparta con ese cliente.
+   */
+  public async ownerMessage(ctx: HttpContext) {
+    if (!this.autorizado(ctx)) return
+    const { request, response } = ctx
     const { businessUuid, phone, text } = request.only(['businessUuid', 'phone', 'text'])
     const business = await Business.findBy('uuid', businessUuid)
     if (!business) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
 
-    const crudo = String(text ?? '').trim()
-    if (crudo) {
-      await NotificationService.registrar(business.id, String(phone ?? ''), 'in', crudo.slice(0, 2000), false)
-    }
+    const telefono = String(phone ?? '')
+    const cuerpo = String(text ?? '')
+      .trim()
+      .slice(0, 2000)
+    if (!telefono) return { status: 'success' }
+    if (cuerpo) await NotificationService.registrar(business.id, telefono, 'out', cuerpo, false)
+    await SalesAgentService.pausar(
+      business.id,
+      telefono,
+      SalesAgentService.pausaHumanoMin(),
+      'El negocio respondió desde el celular'
+    )
+    return { status: 'success' }
+  }
 
-    const mensaje = crudo
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
+  /** Respuestas fijas de siempre: «menú» y «mi pedido». */
+  private async respuestaPorReglas(business: Business, phone: string, crudo: string) {
+    const mensaje = crudo.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
     const base = (env.get('STORE_PUBLIC_URL') ?? '').replace(/\/$/, '')
     const enlace = `${base}/t/${business.slug}`
 
     if (/\b(menu|carta|pedir|pedido nuevo|hola|buenas)\b/.test(mensaje)) {
-      return {
-        status: 'success',
-        reply: `¡Hola! 👋 Bienvenido a ${business.name}.\nMira nuestra carta y haz tu pedido aquí:\n${enlace}`,
-      }
+      return `¡Hola! 👋 Bienvenido a ${business.name}.\nMira nuestra carta y haz tu pedido aquí:\n${enlace}`
     }
 
     if (/\b(estado|pedido|donde|cuanto falta|seguimiento)\b/.test(mensaje)) {
@@ -362,15 +485,12 @@ export default class WhatsappBotController {
         .first()
 
       if (!ultimo) {
-        return { status: 'success', reply: `No encontramos pedidos con este número. Haz uno en ${enlace}` }
+        return `No encontramos pedidos con este número. Haz uno en ${enlace}`
       }
 
-      return {
-        status: 'success',
-        reply: `Tu pedido ${ultimo.code} está *${ultimo.status}*.\nSíguelo aquí: ${NotificationService.enlaceSeguimiento(business, ultimo)}`,
-      }
+      return `Tu pedido ${ultimo.code} está *${ultimo.status}*.\nSíguelo aquí: ${NotificationService.enlaceSeguimiento(business, ultimo)}`
     }
 
-    return { status: 'success', reply: null }
+    return null
   }
 }

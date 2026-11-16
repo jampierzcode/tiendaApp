@@ -120,6 +120,7 @@ router
     router.post('/outbox/claim', [WhatsappBotController, 'claim'])
     router.post('/outbox/:id/result', [WhatsappBotController, 'result'])
     router.post('/inbound', [WhatsappBotController, 'inbound'])
+    router.post('/owner-message', [WhatsappBotController, 'ownerMessage'])
   })
   .prefix('/api/bot')
 
@@ -265,6 +266,8 @@ router
     router.post('/whatsapp/connect', [WhatsappPanelController, 'connect'])
     router.post('/whatsapp/disconnect', [WhatsappPanelController, 'disconnect'])
     router.put('/whatsapp/templates', [WhatsappPanelController, 'saveTemplates'])
+    router.put('/whatsapp/agent', [WhatsappPanelController, 'saveAgent'])
+    router.post('/whatsapp/conversations/:contact/resume-agent', [WhatsappPanelController, 'resumeAgent'])
     router.get('/whatsapp/unread', [WhatsappPanelController, 'unread'])
     router.get('/whatsapp/conversations', [WhatsappPanelController, 'conversations'])
     router.get('/whatsapp/conversations/:contact', [WhatsappPanelController, 'messages'])

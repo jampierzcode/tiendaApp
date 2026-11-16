@@ -261,7 +261,11 @@ export default class OrderService {
    * agrupan) y el precio se recalcula aquí con lo que hay en la base: lo que
    * mande el navegador solo dice QUÉ se eligió, nunca cuánto cuesta.
    */
-  static async crearDesdeMenu(business: Business, datos: DatosPedidoMenu) {
+  static async crearDesdeMenu(
+    business: Business,
+    datos: DatosPedidoMenu,
+    ajustes: { avisarCliente?: boolean } = {}
+  ) {
     if (!datos.items?.length) throw new OrderError('El carrito está vacío')
 
     if (!datos.customerName?.trim() || !datos.customerPhone?.trim()) {
@@ -466,7 +470,8 @@ export default class OrderService {
     })
 
     await order.load('items', (q) => q.preload('modifiers'))
-    await NotificationService.notificar(business, order, 'recibido')
+    // El asistente de WhatsApp ya le contesta al cliente con su pedido: no se duplica el aviso.
+    if (ajustes.avisarCliente !== false) await NotificationService.notificar(business, order, 'recibido')
 
     return { order, whatsappUrl: this.construirUrlWhatsapp(business, order) }
   }
@@ -490,7 +495,7 @@ export default class OrderService {
     return { promos: await PromotionService.activas(business.id, codigo), cupon }
   }
 
-  private static calcularEnvio(business: Business, montoNeto: number, metodo: string): number {
+  static calcularEnvio(business: Business, montoNeto: number, metodo: string): number {
     if (metodo === 'recojo' || metodo === 'mesa') return 0
 
     const gratisDesde = business.freeShippingFrom

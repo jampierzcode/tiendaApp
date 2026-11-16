@@ -121,6 +121,14 @@ export default class Business extends BaseModel {
   @column()
   declare notificationTemplates: string | null
 
+  /** Asistente de ventas con IA en el WhatsApp del negocio. */
+  @column()
+  declare aiAgentEnabled: boolean
+
+  /** Lo que el dueño quiere que el asistente sepa (políticas, FAQ, tono…). */
+  @column()
+  declare aiAgentInstructions: string | null
+
   // --- Suscripción ---
 
   /** 'trial' (prueba gratis), 'active' (pagando) o 'expired'. */

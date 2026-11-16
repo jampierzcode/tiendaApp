@@ -52,6 +52,12 @@ export default await Env.create(new URL('../', import.meta.url), {
   BOT_API_KEY: Env.schema.string.optional(),
   /** Dominio público de la tienda, para los enlaces que manda el bot. */
   STORE_PUBLIC_URL: Env.schema.string.optional(),
+  /** Asistente de ventas con IA del WhatsApp (OpenAI). Sin clave, el bot usa sus reglas fijas. */
+  OPENAI_API_KEY: Env.schema.string.optional(),
+  OPENAI_MODEL: Env.schema.string.optional(),
+  OPENAI_BASE_URL: Env.schema.string.optional(),
+  /** Minutos que el asistente calla con un cliente cuando el dueño le escribe a mano. */
+  AI_AGENT_HUMAN_PAUSE_MIN: Env.schema.number.optional(),
   /** Claves VAPID de los avisos push; sin ellas los avisos del navegador quedan apagados. */
   VAPID_PUBLIC_KEY: Env.schema.string.optional(),
   VAPID_PRIVATE_KEY: Env.schema.string.optional(),
