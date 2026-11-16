@@ -46,6 +46,8 @@ export interface TipoEntrega {
   direccion: string
   reglas: string
   soloRespaldo: boolean
+  /** Pedido mínimo (en productos) para usar esta entrega. Null = sin mínimo. */
+  minimo: number | null
 }
 
 export interface ZonaEnvio {
@@ -76,6 +78,20 @@ export interface Sede {
   referencia: string
 }
 
+/** Lo propio de un restaurante: horario por día, tiempos, sugerencias y reservas. */
+export interface ConfigRestaurante {
+  /** 1 = lunes … 7 = domingo; un día sin fila está cerrado. */
+  horario: { dia: number; abre: string; cierra: string }[]
+  mensajeCerrado: string
+  /** Fuera de horario, ¿se toman pedidos para cuando abra? */
+  programados: boolean
+  /** Minutos de preparación en cocina (recojo / mesa). */
+  prepMin: number | null
+  /** Qué ofrecer para subir el ticket: bebida, postre, agrandar… */
+  sugerencias: string
+  reservas: { activo: boolean; instrucciones: string }
+}
+
 export interface ConfigVendedor {
   nombre: string
   publico: string
@@ -91,6 +107,7 @@ export interface ConfigVendedor {
   derivarCuando: string[]
   descuentos: string
   sedes: Sede[]
+  restaurante: ConfigRestaurante
 }
 
 export const DATOS_SUGERIDOS = [
@@ -120,6 +137,14 @@ export const CONFIG_POR_DEFECTO: ConfigVendedor = {
   derivarCuando: ['Problema con el pago', 'Devolución o cambio', 'Queja grave'],
   descuentos: '',
   sedes: [],
+  restaurante: {
+    horario: [],
+    mensajeCerrado: '',
+    programados: false,
+    prepMin: null,
+    sugerencias: '',
+    reservas: { activo: false, instrucciones: '' },
+  },
 }
 
 const texto = (v: unknown, max: number) => String(v ?? '').trim().slice(0, max)
@@ -216,6 +241,24 @@ export default class SellerConfigService {
           referencia: texto(x?.referencia, 200),
         }))
         .filter((x: Sede) => x.direccion || x.nombre),
+      restaurante: {
+        horario: (Array.isArray(c.restaurante?.horario) ? c.restaurante.horario : [])
+          .map((h: any) => ({
+            dia: Number(h?.dia),
+            abre: hora(h?.abre, '12:00'),
+            cierra: hora(h?.cierra, '22:00'),
+          }))
+          .filter((h: any) => Number.isInteger(h.dia) && h.dia >= 1 && h.dia <= 7)
+          .slice(0, 14),
+        mensajeCerrado: texto(c.restaurante?.mensajeCerrado, 500),
+        programados: Boolean(c.restaurante?.programados),
+        prepMin: numero(c.restaurante?.prepMin),
+        sugerencias: texto(c.restaurante?.sugerencias, 600),
+        reservas: {
+          activo: Boolean(c.restaurante?.reservas?.activo),
+          instrucciones: texto(c.restaurante?.reservas?.instrucciones, 600),
+        },
+      },
     }
   }
 
@@ -258,6 +301,7 @@ export default class SellerConfigService {
           direccion: texto(t?.direccion, 300),
           reglas: texto(t?.reglas, 1000),
           soloRespaldo: Boolean(t?.soloRespaldo),
+          minimo: numero(t?.minimo),
         }
       }),
     }))
@@ -348,6 +392,59 @@ export default class SellerConfigService {
       if (dentro && h.promesa) return h.promesa
     }
     return tipo.promesaResto || null
+  }
+
+  /**
+   * ¿El restaurante está abierto ahora? Sin horario cargado se asume abierto
+   * (decide el texto libre de "Horario" del negocio). Un turno que cruza la
+   * medianoche (19:00–02:00) cuenta para el día en que empieza.
+   */
+  static estadoRestaurante(business: Business, ahora: DateTime) {
+    const h = this.config(business).restaurante.horario
+    if (!h.length) return { conHorario: false, abierto: true, hoy: '', proximo: '' }
+    const aMin = (x: string) => {
+      const [hh, mm] = x.split(':').map(Number)
+      return hh * 60 + mm
+    }
+    const min = ahora.hour * 60 + ahora.minute
+    const dentro = (t: { abre: string; cierra: string }, m: number, ayer: boolean) => {
+      const a = aMin(t.abre)
+      const c = aMin(t.cierra) || 24 * 60
+      if (a < c) return !ayer && m >= a && m < c
+      return ayer ? m < c : m >= a
+    }
+    const dia = ahora.weekday
+    const diaAyer = dia === 1 ? 7 : dia - 1
+    const abierto =
+      h.some((t) => t.dia === dia && dentro(t, min, false)) ||
+      h.some((t) => t.dia === diaAyer && dentro(t, min, true))
+    const nombres = ['', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+    const hoy = h
+      .filter((t) => t.dia === dia)
+      .map((t) => `${t.abre}–${t.cierra}`)
+      .join(' y ')
+    // Próxima apertura (hoy más tarde o en los próximos 7 días).
+    let proximo = ''
+    for (let i = 0; i < 8 && !proximo; i++) {
+      const d = ((dia - 1 + i) % 7) + 1
+      const turnos = h
+        .filter((t) => t.dia === d && (i > 0 || aMin(t.abre) > min))
+        .sort((a, b) => aMin(a.abre) - aMin(b.abre))
+      if (turnos.length) proximo = `${i === 0 ? 'hoy' : i === 1 ? 'mañana' : `el ${nombres[d]}`} a las ${turnos[0].abre}`
+    }
+    return { conHorario: true, abierto, hoy, proximo }
+  }
+
+  /** Horario semanal en texto, agrupando días iguales. */
+  static textoHorario(business: Business) {
+    const h = this.config(business).restaurante.horario
+    const nombres = ['', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+    return [1, 2, 3, 4, 5, 6, 7]
+      .map((d) => {
+        const t = h.filter((x) => x.dia === d).map((x) => `${x.abre}–${x.cierra}`)
+        return `${nombres[d]}: ${t.length ? t.join(' y ') : 'cerrado'}`
+      })
+      .join(' · ')
   }
 
   static textoPago(tipo: TipoEntrega, simbolo: string) {
@@ -441,6 +538,7 @@ export default class SellerConfigService {
                 .filter(Boolean)
                 .join('. ')}`,
               `    Pago: ${this.textoPago(t, simbolo)}`,
+              t.minimo !== null && `    Pedido mínimo: ${simbolo} ${t.minimo.toFixed(2)} en productos`,
               t.direccion && `    Dirección (${t.clase === 'recojo' ? 'punto de recojo' : 'agencia'}): ${t.direccion}`,
               t.datos.length && `    Datos que DEBES pedir: ${t.datos.join(', ')}`,
               t.clase === 'agencia' &&

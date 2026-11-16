@@ -238,6 +238,9 @@ export default class SalesAgentService {
       if (business.esRestaurante && ['registrar_comprobante', 'buscar_sedes'].includes(t.function.name)) {
         return false
       }
+      if (t.function.name === 'solicitar_reserva') {
+        return business.esRestaurante && SellerConfigService.config(business).restaurante.reservas.activo
+      }
       return !(sinSedes && t.function.name === 'buscar_sedes')
     })
     const base = (env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1').replace(/\/$/, '')
@@ -342,6 +345,25 @@ export default class SalesAgentService {
         : 'sin costo'
 
     const metodosPago = PaymentMethodService.texto(business)
+    const rest = cfg.restaurante
+    const estado = restaurante ? SellerConfigService.estadoRestaurante(business, ahora) : null
+    const bloqueRestaurante = restaurante
+      ? [
+          estado?.conHorario && `Horario de atención: ${SellerConfigService.textoHorario(business)}.`,
+          estado?.conHorario &&
+            (estado.abierto
+              ? `AHORA ESTÁ ABIERTO${estado.hoy ? ` (hoy ${estado.hoy})` : ''}.`
+              : `AHORA ESTÁ CERRADO. Abre ${estado.proximo || 'pronto'}. ${rest.mensajeCerrado ? `Dilo así: «${rest.mensajeCerrado}». ` : ''}${rest.programados ? 'Puedes tomar el pedido como PROGRAMADO para cuando abra: avísale que se prepara al abrir.' : 'NO tomes pedidos hasta que abra; puedes mostrarle la carta y resolver dudas.'}`),
+          rest.prepMin && `Tiempo de preparación aproximado: ${rest.prepMin} minutos (para recojo o mesa).`,
+          rest.sugerencias &&
+            `SUGERENCIAS PARA SUBIR EL PEDIDO (una sola vez, antes de cerrar, sin insistir): ${rest.sugerencias}`,
+          rest.reservas.activo
+            ? `RESERVAS: sí se aceptan. Pide nombre, número de personas, fecha y hora, y usa "solicitar_reserva"; dile que el restaurante la confirma.${rest.reservas.instrucciones ? ` Reglas: ${rest.reservas.instrucciones}` : ''}`
+            : 'RESERVAS: no se toman por este medio; si preguntan, deriva a una persona.',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : ''
     const textoZonas = SellerConfigService.textoEnvios(business, ahora)
     const conZonas = Boolean(textoZonas)
 
@@ -426,7 +448,7 @@ ${cliente ? `Este cliente ya compró antes: se llama ${cliente.name}${cliente.ad
 
 DATOS DEL NEGOCIO
 ${datos}
-${conZonas ? `\nENVÍOS Y ENTREGAS (zonas y tipos de entrega del negocio)\n${textoZonas}\n- Pregunta en qué distrito / ciudad está el cliente y busca su zona en la lista. Ofrécele SOLO los tipos de entrega de su zona, con costo, plazo ("si pide ahora…") y forma de pago. Si su lugar no está en ninguna zona, dile con amabilidad que no llegan ahí y usa "derivar_a_humano" si insiste.\n- Cuando elija, usa su tipoEntregaId en "cotizar_pedido" y "crear_pedido".\n- Si el pago es adelantado (total o parcial), di cuánto debe adelantar, cómo pagar y pídele la captura del comprobante. El pedido se registra igual y el negocio valida el pago.\n- Pide TODOS los "Datos que DEBES pedir" del tipo elegido (de a pocos, de forma natural) y pásalos en "datosCliente" al crear el pedido.\n` : ''}${textoFaqs ? `\nPREGUNTAS FRECUENTES (respóndelas con esta información; consúltalas antes de decir que no sabes algo)\n${textoFaqs}\n` : ''}${cfg.descuentos ? `\nDESCUENTOS PERMITIDOS POR EL DUEÑO\n${cfg.descuentos}\n` : ''}${cfg.derivarCuando.length ? `\nDERIVA A UNA PERSONA ("derivar_a_humano") EN ESTAS SITUACIONES\n${cfg.derivarCuando.map((d) => `- ${d}`).join('\n')}\n` : ''}${instrucciones ? `\nINDICACIONES DEL DUEÑO (síguelas siempre que no contradigan las reglas de abajo)\n${instrucciones}\n` : ''}${cfg.ejemplo ? `\nEJEMPLO DE CÓMO QUIERE EL DUEÑO QUE VENDAS (imita el estilo, el orden y la forma de cerrar; los datos reales salen de las herramientas y de lo de arriba, no del ejemplo)\n-----\n${cfg.ejemplo}\n-----\n` : ''}
+${bloqueRestaurante ? `\nRESTAURANTE\n${bloqueRestaurante}\n` : ''}${conZonas ? `\nENVÍOS Y ENTREGAS (zonas y tipos de entrega del negocio)\n${textoZonas}\n- Pregunta en qué distrito / ciudad está el cliente y busca su zona en la lista. Ofrécele SOLO los tipos de entrega de su zona, con costo, plazo ("si pide ahora…") y forma de pago. Si su lugar no está en ninguna zona, dile con amabilidad que no llegan ahí y usa "derivar_a_humano" si insiste.\n- Cuando elija, usa su tipoEntregaId en "cotizar_pedido" y "crear_pedido".\n- Si el pago es adelantado (total o parcial), di cuánto debe adelantar, cómo pagar y pídele la captura del comprobante. El pedido se registra igual y el negocio valida el pago.\n- Pide TODOS los "Datos que DEBES pedir" del tipo elegido (de a pocos, de forma natural) y pásalos en "datosCliente" al crear el pedido.\n` : ''}${textoFaqs ? `\nPREGUNTAS FRECUENTES (respóndelas con esta información; consúltalas antes de decir que no sabes algo)\n${textoFaqs}\n` : ''}${cfg.descuentos ? `\nDESCUENTOS PERMITIDOS POR EL DUEÑO\n${cfg.descuentos}\n` : ''}${cfg.derivarCuando.length ? `\nDERIVA A UNA PERSONA ("derivar_a_humano") EN ESTAS SITUACIONES\n${cfg.derivarCuando.map((d) => `- ${d}`).join('\n')}\n` : ''}${instrucciones ? `\nINDICACIONES DEL DUEÑO (síguelas siempre que no contradigan las reglas de abajo)\n${instrucciones}\n` : ''}${cfg.ejemplo ? `\nEJEMPLO DE CÓMO QUIERE EL DUEÑO QUE VENDAS (imita el estilo, el orden y la forma de cerrar; los datos reales salen de las herramientas y de lo de arriba, no del ejemplo)\n-----\n${cfg.ejemplo}\n-----\n` : ''}
 TU OBJETIVO
 Ayudar al cliente a encontrar lo que busca y cerrar la venta registrando su pedido. Recomienda, resuelve dudas y sugiere un complemento cuando tenga sentido, sin presionar.
 
@@ -436,7 +458,11 @@ CÓMO TRABAJAS
 - Antes de pedir, revisa el producto con "ver_producto" para conocer ${restaurante ? 'sus opciones obligatorias (p. ej. término, guarnición) y pregúntale al cliente las que falten' : 'sus variaciones (talla, color…) y su stock, y pregúntale al cliente cuál quiere'}.
 - FOTOS: ${fotos} Tu respuesta de texto se mandará como descripción de la última foto (en el mismo mensaje), así que escríbela pensando en eso: no digas "te envío la foto", simplemente describe y vende.
 - Para cerrar el pedido necesitas: productos y cantidades${restaurante ? ' (con sus opciones)' : ' (con la variación exacta)'}, el nombre del cliente y la forma de entrega (${conZonas ? 'el tipo de entrega de su zona y los datos que ese tipo pide' : `envío con dirección, recojo${restaurante ? ', o mesa con su número' : ''}`}). Pídelo de forma natural, de a pocos.
-- Si el cliente quiere separar o reservar un producto, es lo mismo que un pedido: cotiza, confirma y créalo; luego explica el adelanto si corresponde.
+${
+  restaurante
+    ? `- Flujo de restaurante: saluda y ofrece la carta (enlace o fotos de los platos que pregunte); toma el pedido plato por plato con sus opciones obligatorias; pregunta la modalidad (delivery con dirección y referencia, recojo en local${conZonas ? '' : ''} o mesa con su número); confirma el resumen con el total y el tiempo estimado; luego registra el pedido. Habla de minutos, no de días.`
+    : '- Si el cliente quiere separar o reservar un producto, es lo mismo que un pedido: cotiza, confirma y créalo; luego explica el adelanto si corresponde.'
+}
 - Antes de crear el pedido usa "cotizar_pedido" y muéstrale un resumen corto con el total real (incluye envío y descuentos). Créalo con "crear_pedido" SOLO cuando el cliente confirme ("sí", "dale", "confirmo"…).
 - Tras crear el pedido, dale el código, el total y el enlace de seguimiento; si el pago es por adelantado, explica cómo pagar con los métodos de pago de arriba (lista los activos con su número y titular) y pídele que mande la foto del comprobante. Los QR marcados «al confirmar» se envían solos con tu respuesta; si pide el QR de otro método, usa "enviar_qr_pago".
 - Si pregunta por un pedido que ya hizo, usa "mis_pedidos".
@@ -479,6 +505,8 @@ FORMATO (WhatsApp, no Markdown)
         return this.crearPedido(ctx, args)
       case 'mis_pedidos':
         return this.misPedidos(ctx.business, ctx.phone)
+      case 'solicitar_reserva':
+        return this.solicitarReserva(ctx, args)
       case 'enviar_qr_pago': {
         const metodo = PaymentMethodService.activos(ctx.business).find(
           (m) => m.id === String(args?.metodoId ?? '')
@@ -814,6 +842,9 @@ FORMATO (WhatsApp, no Markdown)
             pago: SellerConfigService.textoPago(entrega.tipo, business.currencySymbol || 'S/'),
             adelantoMinimo: SellerConfigService.adelanto(entrega.tipo, total),
             datosQueDebesPedir: entrega.tipo.datos,
+            ...(entrega.tipo.minimo && neto < entrega.tipo.minimo
+              ? { faltaParaMinimo: PricingService.redondear(entrega.tipo.minimo - neto) }
+              : {}),
           }
         : {}),
       promocionesAplicadas: q.lineas.map((l) => l.promo?.name).filter(Boolean),
@@ -903,6 +934,31 @@ FORMATO (WhatsApp, no Markdown)
     const entrega = this.entrega(business, args, neto)
     if ('error' in entrega) return { creado: false, error: entrega.error }
 
+    // Restaurante cerrado: solo pedidos programados si el dueño lo permite.
+    let programado = false
+    if (business.esRestaurante) {
+      const zona = env.get('REPORTS_TIMEZONE', 'America/Lima')
+      const est = SellerConfigService.estadoRestaurante(business, DateTime.now().setZone(zona))
+      if (!est.abierto) {
+        if (!SellerConfigService.config(business).restaurante.programados) {
+          return {
+            creado: false,
+            error: `El restaurante está cerrado ahora (abre ${est.proximo || 'pronto'}). No registres el pedido; invítalo a pedir cuando abra.`,
+          }
+        }
+        programado = true
+      }
+    }
+
+    // Pedido mínimo del tipo de entrega elegido.
+    if (entrega.tipo?.minimo && neto + 0.001 < entrega.tipo.minimo) {
+      const sim = business.currencySymbol || 'S/'
+      return {
+        creado: false,
+        error: `El pedido mínimo para ${entrega.tipo.nombre} es ${sim} ${entrega.tipo.minimo.toFixed(2)} y lleva ${sim} ${neto.toFixed(2)}. Sugiérele agregar algo más.`,
+      }
+    }
+
     // Datos obligatorios del tipo de entrega: sin ellos no se cierra.
     const extra: Record<string, string> = {}
     for (const [k, v] of Object.entries(args?.datosCliente ?? {})) {
@@ -940,6 +996,7 @@ FORMATO (WhatsApp, no Markdown)
       deliveryCity: args?.ciudad ? String(args.ciudad) : null,
       tableLabel: args?.mesa ? String(args.mesa) : null,
       note: [
+        programado && 'PEDIDO PROGRAMADO (llegó con el local cerrado: preparar al abrir)',
         entrega.tipo && `Entrega: ${entrega.tipo.nombre} (zona ${entrega.zona?.nombre})`,
         entrega.tipo && entrega.detalle && `Envío: ${entrega.detalle}`,
         entrega.promesa && `Promesa: ${entrega.promesa}`,
@@ -1160,6 +1217,41 @@ FORMATO (WhatsApp, no Markdown)
     }
   }
 
+  /** Reserva de mesa: avisa al restaurante; la confirma una persona. */
+  private static async solicitarReserva(ctx: Contexto, args: any) {
+    const { business, phone } = ctx
+    if (!SellerConfigService.config(business).restaurante.reservas.activo) {
+      return { error: 'Este restaurante no toma reservas por aquí. Deriva a una persona si insiste.' }
+    }
+    const datos = [
+      String(args?.nombre ?? '').trim(),
+      args?.personas && `${Number(args.personas)} personas`,
+      String(args?.fecha ?? '').trim(),
+      String(args?.hora ?? '').trim(),
+      String(args?.nota ?? '').trim(),
+    ].filter(Boolean)
+    if (datos.length < 4) {
+      return { error: 'Faltan datos: nombre, número de personas, fecha y hora.' }
+    }
+    const titulo = 'Solicitud de reserva por WhatsApp'
+    const cuerpo = `${datos.join(' · ')} · ${phone.replace(/\D/g, '')}`.slice(0, 250)
+    try {
+      await Notification.create({ businessId: business.id, type: 'mensaje', orderId: null, title: titulo, body: cuerpo })
+      await PushService.enviar(business.userId, {
+        title: titulo,
+        body: cuerpo,
+        url: `/b/${business.uuid}/chat`,
+        tag: `reserva-${phone}`,
+      })
+    } catch (error) {
+      logger.error({ err: error }, 'No se pudo avisar la reserva')
+    }
+    return {
+      registrada: true,
+      nota: 'Dile que su solicitud quedó registrada y que el restaurante le confirma por este chat. No la des por confirmada.',
+    }
+  }
+
   private static async derivar(ctx: Contexto, motivo: string) {
     const { business, phone } = ctx
     await this.pausar(
@@ -1334,6 +1426,25 @@ const TOOLS = [
       description:
         'Últimos pedidos de este cliente (por su número de WhatsApp) con estado, total y enlace de seguimiento.',
       parameters: sinParametros,
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'solicitar_reserva',
+      description: 'Registra una solicitud de reserva de mesa y avisa al restaurante (la confirma una persona).',
+      parameters: {
+        type: 'object',
+        properties: {
+          nombre: { type: 'string' },
+          personas: { type: 'number' },
+          fecha: { type: 'string', description: 'Ej. "sábado 22/11".' },
+          hora: { type: 'string', description: 'Ej. "8:00 pm".' },
+          nota: { type: 'string', description: 'Ocasión, preferencia de zona, etc.' },
+        },
+        required: ['nombre', 'personas', 'fecha', 'hora'],
+        additionalProperties: false,
+      },
     },
   },
   {
