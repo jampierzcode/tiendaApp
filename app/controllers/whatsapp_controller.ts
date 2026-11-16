@@ -8,6 +8,8 @@ import SalesAgentService from '#services/sales_agent_service'
 import WhatsappAgentPause from '#models/whatsapp_agent_pause'
 import logger from '@adonisjs/core/services/logger'
 import Business from '#models/business'
+import Customer from '#models/customer'
+import PushService from '#services/push_service'
 import env from '#start/env'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -418,6 +420,30 @@ export default class WhatsappBotController {
    * Con el asistente de IA encendido conversa y vende; si está apagado, sin
    * clave o falla, quedan las reglas de siempre («menú», «mi pedido»).
    */
+  private async avisarMensaje(business: Business, telefono: string, texto: string) {
+    try {
+      const digitos = telefono.replace(/\D/g, '')
+      const cliente = await Customer.query()
+        .where('business_id', business.id)
+        .andWhere('phone', 'like', `%${digitos.slice(-9)}`)
+        .first()
+      const quien = cliente?.name || (digitos.length <= 13 ? `+${digitos}` : 'un cliente')
+      const atiendeIa =
+        SalesAgentService.disponible() &&
+        business.aiAgentEnabled &&
+        !(await SalesAgentService.enPausa(business.id, telefono))
+      await PushService.enviar(business.userId, {
+        title: `💬 ${quien}`,
+        body: `${texto.slice(0, 110)}${atiendeIa ? ' · Lo atiende tu vendedor IA' : ''}`,
+        url: `/b/${business.uuid}/chat`,
+        // Misma etiqueta que el aviso de la pestaña: si llegan los dos, se ve uno solo.
+        tag: 'chat',
+      })
+    } catch (error) {
+      logger.error({ err: error }, 'No se pudo avisar el mensaje de WhatsApp')
+    }
+  }
+
   public async inbound(ctx: HttpContext) {
     if (!this.autorizado(ctx)) return
     const { request, response } = ctx
@@ -463,6 +489,10 @@ export default class WhatsappBotController {
     if (!crudo) return { status: 'success', reply: null, media: [] }
 
     const entrante = await NotificationService.registrar(business.id, telefono, 'in', crudo, false)
+
+    // Aviso del navegador al dueño (como Messenger): llega aunque el panel esté en otra pestaña
+    // o cerrado. No se espera: el cliente recibe su respuesta igual si el envío del aviso tarda.
+    void this.avisarMensaje(business, telefono, crudo)
 
     // Solo para este turno: decirle al modelo si la foto viene adjunta o no se pudo abrir.
     const paraModelo =
