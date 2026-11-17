@@ -16,6 +16,9 @@ export type AsignarInput = {
   courtesy?: boolean
   /** Precio pactado por mes/año para este cliente; si no, el de lista. */
   unitPrice?: number | null
+  /** Descuento sobre el subtotal: porcentaje (0–100) o monto en soles. */
+  discountType?: 'percent' | 'amount' | null
+  discountValue?: number | null
   paymentMethod?: string | null
   paymentReference?: string | null
   notes?: string | null
@@ -88,6 +91,13 @@ export default class SubscriptionService {
           ? Math.round(Number(input.unitPrice) * 100) / 100
           : Number(precio.price)
 
+      const { subtotal, descuento, total } = this.calcularTotal(
+        unitario,
+        cantidad,
+        input.discountType ?? null,
+        input.discountValue ?? null
+      )
+
       const sub = await Subscription.create(
         {
           businessId: business.id,
@@ -97,7 +107,11 @@ export default class SubscriptionService {
           interval: precio.interval,
           quantity: cantidad,
           unitPrice: unitario,
-          total: Math.round(unitario * cantidad * 100) / 100,
+          subtotal,
+          discountType: descuento > 0 ? input.discountType! : null,
+          discountValue: descuento > 0 ? Number(input.discountValue) : null,
+          discountAmount: descuento,
+          total,
           currency: precio.currency,
           startsAt: inicio,
           endsAt: fin,
@@ -113,6 +127,31 @@ export default class SubscriptionService {
       await this.sincronizar(business, trx)
       return sub
     })
+  }
+
+  /**
+   * Subtotal, descuento y total en soles (redondeados a céntimos). El
+   * descuento nunca deja el total por debajo de cero.
+   */
+  static calcularTotal(
+    unitario: number,
+    cantidad: number,
+    tipo: 'percent' | 'amount' | null,
+    valor: number | null
+  ) {
+    const r = (n: number) => Math.round(n * 100) / 100
+    const subtotal = r(unitario * cantidad)
+    let descuento = 0
+    if (tipo && valor && valor > 0) {
+      if (tipo === 'percent' && valor > 100) {
+        throw new SubscriptionError('El descuento no puede pasar del 100 %')
+      }
+      descuento = tipo === 'percent' ? r((subtotal * valor) / 100) : r(valor)
+      if (descuento > subtotal) {
+        throw new SubscriptionError('El descuento no puede ser mayor que el subtotal')
+      }
+    }
+    return { subtotal, descuento, total: r(subtotal - descuento) }
   }
 
   /** Prueba gratis de un plan (la usa el alta de negocios y el superadmin). */
@@ -133,6 +172,8 @@ export default class SubscriptionService {
         interval: 'trial',
         quantity: dias,
         unitPrice: 0,
+        subtotal: 0,
+        discountAmount: 0,
         total: 0,
         currency: 'PEN',
         startsAt: ahora,

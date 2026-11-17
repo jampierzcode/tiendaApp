@@ -12,6 +12,8 @@ const asignarValidator = vine.compile(
     quantity: vine.number().min(1).max(36),
     courtesy: vine.boolean().optional(),
     unitPrice: vine.number().min(0).max(100000).nullable().optional(),
+    discountType: vine.enum(['percent', 'amount']).nullable().optional(),
+    discountValue: vine.number().min(0).max(100000).nullable().optional(),
     paymentMethod: vine.string().trim().maxLength(40).nullable().optional(),
     paymentReference: vine.string().trim().maxLength(120).nullable().optional(),
     notes: vine.string().trim().maxLength(1000).nullable().optional(),

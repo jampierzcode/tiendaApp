@@ -34,6 +34,21 @@ export default class Subscription extends BaseModel {
   @column({ consume: (v) => Number(v) })
   declare unitPrice: number
 
+  /** Precio × cantidad, antes del descuento. */
+  @column({ consume: (v) => Number(v) })
+  declare subtotal: number
+
+  @column()
+  declare discountType: 'percent' | 'amount' | null
+
+  @column({ consume: (v) => (v === null ? null : Number(v)) })
+  declare discountValue: number | null
+
+  /** Lo que se descontó en soles. */
+  @column({ consume: (v) => Number(v) })
+  declare discountAmount: number
+
+  /** Lo cobrado: subtotal − descuento. */
   @column({ consume: (v) => Number(v) })
   declare total: number
 

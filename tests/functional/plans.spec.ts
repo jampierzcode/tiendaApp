@@ -269,4 +269,45 @@ test.group('Planes y suscripciones', (group) => {
       .loginAs(admin)
     ;(await client.get(`${t.base}/shipments`).loginAs(t.user)).assertStatus(200)
   })
+
+  test('descuento: 10 % o monto fijo sobre el subtotal; nunca mayor al subtotal', async ({
+    client,
+    assert,
+  }) => {
+    const t = await tienda()
+    const admin = await usuario('superadmin')
+    const online = await precio('tienda_online', 'month')
+    const url = `/api/businesses/${t.business.id}/subscriptions`
+
+    const pct = await client
+      .post(url)
+      .json({ planPriceId: online.id, quantity: 3, discountType: 'percent', discountValue: 10 })
+      .loginAs(admin)
+    pct.assertStatus(201)
+    assert.equal(pct.body().data.subtotal, 119.7)
+    assert.equal(pct.body().data.discountAmount, 11.97)
+    assert.equal(pct.body().data.total, 107.73)
+
+    const monto = await client
+      .post(url)
+      .json({
+        planPriceId: online.id,
+        quantity: 1,
+        unitPrice: 60,
+        discountType: 'amount',
+        discountValue: 20,
+      })
+      .loginAs(admin)
+    monto.assertStatus(201)
+    assert.equal(monto.body().data.total, 40)
+
+    const exceso = await client
+      .post(url)
+      .json({ planPriceId: online.id, quantity: 1, discountType: 'amount', discountValue: 500 })
+      .loginAs(admin)
+    exceso.assertStatus(422)
+
+    const miPlan = await client.get(`${t.base}/plan`).loginAs(t.user)
+    assert.equal(miPlan.body().data.subscriptions.length, 2)
+  })
 })
