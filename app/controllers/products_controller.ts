@@ -1,6 +1,6 @@
 import Category from '#models/category'
 import CategoryProduct from '#models/category_product'
-import Product from '#models/product'
+import Product, { type ProductFaq } from '#models/product'
 import ProductVariation from '#models/product_variation'
 import InventoryService from '#services/inventory_service'
 import VariationService, { VariationError } from '#services/variation_service'
@@ -21,6 +21,18 @@ type CategoryLinkInput = { categoryId: number; subcategoryId?: number | null }
  * `:businessUuid` de la ruta. Ningún método vuelve a deducirlo del usuario.
  */
 export default class ProductsController {
+  /** Preguntas frecuentes del formulario: solo pares completos, recortados, máx. 20. */
+  static limpiarFaqs(entrada: unknown): ProductFaq[] {
+    if (!Array.isArray(entrada)) return []
+    return entrada
+      .map((f: any) => ({
+        pregunta: String(f?.pregunta ?? '').trim().slice(0, 300),
+        respuesta: String(f?.respuesta ?? '').trim().slice(0, 1000),
+      }))
+      .filter((f) => f.pregunta && f.respuesta)
+      .slice(0, 20)
+  }
+
   /**
    * Reemplaza las categorías del producto por las pedidas. Un producto puede
    * estar en varias (Motor › Lubricación y Repuestos Sail, por ejemplo); cada
@@ -237,6 +249,7 @@ export default class ProductsController {
           businessImageId: data.business_image_id ?? null,
           status: data.status === 'inactivo' ? 'inactivo' : 'activo',
           unlimitedStock: Boolean(request.input('unlimited_stock', false)),
+          aiFaqs: ProductsController.limpiarFaqs(request.input('ai_faqs')),
           stock: 0,
         },
         { client: trx }
@@ -593,6 +606,10 @@ export default class ProductsController {
         request.input('unlimited_stock') === undefined
           ? product.unlimitedStock
           : Boolean(request.input('unlimited_stock')),
+      aiFaqs:
+        request.input('ai_faqs') === undefined
+          ? product.aiFaqs
+          : ProductsController.limpiarFaqs(request.input('ai_faqs')),
     })
 
     try {

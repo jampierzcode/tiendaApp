@@ -542,8 +542,9 @@ export default class SellerConfigService {
               t.direccion && `    Dirección (${t.clase === 'recojo' ? 'punto de recojo' : 'agencia'}): ${t.direccion}`,
               t.datos.length && `    Datos que DEBES pedir: ${t.datos.join(', ')}`,
               t.clase === 'agencia' &&
-                sedes.has(normalizar(t.nombre)) &&
-                `    Sedes: hay ${sedes.get(normalizar(t.nombre))} sedes de ${t.nombre} cargadas. Cuando el cliente diga su ciudad, usa "buscar_sedes" (empresa: "${t.nombre}") y muéstrale las opciones numeradas con su dirección para que elija.`,
+                (sedes.has(normalizar(t.nombre))
+                  ? `    Sedes: el negocio cargó ${sedes.get(normalizar(t.nombre))} sedes de ${t.nombre} como SUGERENCIA (no es la lista completa: se puede enviar a cualquier agencia de ${t.nombre}). Cuando el cliente diga su ciudad, usa "buscar_sedes" (empresa: "${t.nombre}") y muéstrale las opciones numeradas con su dirección. Si en su ciudad no hay sedes cargadas, o prefiere otra, acepta la agencia de ${t.nombre} que él te indique (nombre o dirección) y guárdala tal cual. NUNCA inventes sedes ni direcciones.`
+                  : `    Sedes: no hay sedes de ${t.nombre} cargadas. Pregúntale al cliente en qué agencia de ${t.nombre} quiere recoger (nombre o dirección) y guárdala tal cual. NUNCA inventes sedes ni direcciones.`),
               t.reglas && `    Reglas: ${t.reglas}`,
             ]
               .filter(Boolean)

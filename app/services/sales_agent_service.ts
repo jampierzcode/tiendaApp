@@ -453,7 +453,7 @@ TU OBJETIVO
 Ayudar al cliente a encontrar lo que busca y cerrar la venta registrando su pedido. Recomienda, resuelve dudas y sugiere un complemento cuando tenga sentido, sin presionar.
 
 CÓMO TRABAJAS
-- Para precios, disponibilidad, stock, opciones o pedidos USA LAS HERRAMIENTAS. Nunca inventes productos, precios, stock, promociones, plazos ni datos que no estén arriba o que no devuelva una herramienta.
+- Para precios, disponibilidad, stock, opciones o pedidos USA LAS HERRAMIENTAS. Nunca inventes productos, precios, stock, promociones, plazos ni datos que no estén arriba o que no devuelva una herramienta. Tampoco inventes sedes, agencias ni direcciones (de Shalom, Olva u otras): solo las que devuelva "buscar_sedes" o las que diga el cliente.
 - Busca con "buscar_productos" (palabras clave cortas, en singular: "polo", "hamburguesa"). Si no aparece, prueba con sinónimos antes de decir que no hay.
 - Antes de pedir, revisa el producto con "ver_producto" para conocer ${restaurante ? 'sus opciones obligatorias (p. ej. término, guarnición) y pregúntale al cliente las que falten' : 'sus variaciones (talla, color…) y su stock, y pregúntale al cliente cuál quiere'}.
 - FOTOS: ${fotos} Tu respuesta de texto se mandará como descripción de la última foto (en el mismo mensaje), así que escríbela pensando en eso: no digas "te envío la foto", simplemente describe y vende.
@@ -533,7 +533,7 @@ FORMATO (WhatsApp, no Markdown)
           nota: r.sedes.length
             ? 'Muéstrale estas opciones numeradas (nombre y dirección) y pregúntale en cuál recoge. Guarda la elegida en datosCliente["Agencia de recojo"] con nombre y dirección.'
             : r.total
-              ? 'No hay sedes cargadas en ese lugar. Pregúntale por la ciudad o provincia más cercana, o usa "derivar_a_humano".'
+              ? 'No hay sedes cargadas en ese lugar, pero igual se puede enviar a cualquier agencia de esa empresa: pregúntale en qué agencia de su ciudad quiere recoger (nombre o dirección) y guárdala tal cual. Si tiene dudas, puedes ofrecerle las sedes cargadas de la ciudad más cercana. NO inventes direcciones.'
               : 'Esta empresa no tiene sedes cargadas: pídele al cliente el nombre o la dirección de la agencia donde quiere recoger.',
         }
       }
@@ -675,6 +675,8 @@ FORMATO (WhatsApp, no Markdown)
       precioAntes: precio.descuento > 0 ? precio.original : null,
       promociones: precio.etiquetas,
       tieneFoto: Boolean(p.businessImageId),
+      // Respuestas que el dueño dejó para este producto: úsalas tal cual.
+      preguntasFrecuentes: p.aiFaqs?.length ? p.aiFaqs : undefined,
     }
 
     if (business.esRestaurante) {
@@ -1326,7 +1328,7 @@ const TOOLS = [
     function: {
       name: 'ver_producto',
       description:
-        'Detalle de un producto: variaciones con stock y precio (tienda) o grupos de opciones obligatorias/extras (restaurante). Úsalo antes de cotizar o pedir.',
+        'Detalle de un producto: variaciones con stock y precio (tienda) o grupos de opciones obligatorias/extras (restaurante). Trae también las preguntas frecuentes que el negocio dejó para ese producto (garantía, medidas, uso…). Úsalo antes de cotizar o pedir y cuando el cliente pregunte un detalle del producto.',
       parameters: {
         type: 'object',
         properties: { productoId: { type: 'number' } },
@@ -1465,7 +1467,7 @@ const TOOLS = [
     function: {
       name: 'buscar_sedes',
       description:
-        'Busca las sedes / agencias (Shalom, Olva…) cargadas por el negocio en la ciudad, provincia o distrito del cliente, con su dirección.',
+        'Busca las sedes / agencias (Shalom, Olva…) cargadas por el negocio en la ciudad, provincia o distrito del cliente, con su dirección. Son sugerencias del negocio, no todas las agencias existentes.',
       parameters: {
         type: 'object',
         properties: {

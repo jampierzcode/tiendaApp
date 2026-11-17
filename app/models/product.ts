@@ -8,6 +8,8 @@ import CategoryProduct from './category_product.js'
 import Tag from './tag.js'
 import ProductImage from './product_image.js'
 
+export type ProductFaq = { pregunta: string; respuesta: string }
+
 export default class Product extends BaseModel {
   @column({ isPrimary: true })
   declare id: number
@@ -54,6 +56,24 @@ export default class Product extends BaseModel {
   /** Se vende sin mirar el inventario: nunca se agota. */
   @column()
   declare unlimitedStock: boolean
+
+  /**
+   * Preguntas frecuentes del producto para el vendedor IA. En la base es
+   * TEXT con JSON; aquí siempre es un arreglo (vacío si no hay o está roto).
+   */
+  @column({
+    prepare: (v: ProductFaq[] | null) => (v && v.length ? JSON.stringify(v) : null),
+    consume: (v: string | null) => {
+      if (!v) return []
+      try {
+        const a = JSON.parse(v)
+        return Array.isArray(a) ? a : []
+      } catch {
+        return []
+      }
+    },
+  })
+  declare aiFaqs: ProductFaq[]
 
   @column()
   declare businessImageId: number | null

@@ -171,7 +171,7 @@ export class WhatsappPanelController {
     const pausas = await WhatsappAgentPause.query()
       .where('business_id', business.id)
       .andWhere('paused_until', '>', DateTime.now().toSQL()!)
-    const pausado = new Set(pausas.map((p) => p.contact))
+    const pausado = new Map(pausas.map((p) => [p.contact, p]))
 
     return {
       status: 'success',
@@ -179,6 +179,8 @@ export class WhatsappPanelController {
         const u = porId.get(f.lastId)
         return {
           agentPaused: pausado.has(f.contact),
+          agentPauseReason: pausado.get(f.contact)?.reason ?? null,
+          agentPausedUntil: pausado.get(f.contact)?.pausedUntil ?? null,
           contact: f.contact,
           phone: u?.phone ?? f.contact,
           name: nombre.get(f.contact) ?? null,
@@ -554,7 +556,7 @@ export default class WhatsappBotController {
   public async ownerMessage(ctx: HttpContext) {
     if (!this.autorizado(ctx)) return
     const { request, response } = ctx
-    const { businessUuid, phone, text } = request.only(['businessUuid', 'phone', 'text'])
+    const { businessUuid, phone, text, pause } = request.only(['businessUuid', 'phone', 'text', 'pause'])
     const business = await Business.findBy('uuid', businessUuid)
     if (!business) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
 
@@ -564,6 +566,9 @@ export default class WhatsappBotController {
       .slice(0, 2000)
     if (!telefono) return { status: 'success' }
     if (cuerpo) await NotificationService.registrar(business.id, telefono, 'out', cuerpo, false)
+    // Bienvenida/ausencia automática de WhatsApp Business: se anota, pero no
+    // es el dueño tomando la conversación.
+    if (pause === false) return { status: 'success' }
     await SalesAgentService.pausar(
       business.id,
       telefono,
