@@ -5,11 +5,20 @@
  * cliente vea una tienda real en el primer minuto, en vez de un panel vacío.
  * Los restaurantes parten del menú de `demo-restaurante`, repartido por subtipo.
  *
- * Sin imágenes a propósito: cada negocio es dueño de las suyas (ver
- * CatalogCloneService). Los precios son referenciales, en soles.
+ * Las fotos de la plantilla viven en el bucket bajo `templates/<rubro>/` y al
+ * registrarse se COPIAN a `businesses/<id>/`: cada negocio es dueño de las
+ * suyas y borrarlas no toca la original (ver CatalogCloneService).
+ * Los precios son referenciales, en soles.
  */
 
-export type TemplateProduct = { name: string; price: number; cost?: number; description?: string }
+export type TemplateProduct = {
+  name: string
+  price: number
+  cost?: number
+  description?: string
+  /** Clave en el bucket de la foto de muestra, p. ej. `templates/polleria/chuleta.jpg`. */
+  image?: string
+}
 
 export type TemplateModifierGroup = {
   name: string
@@ -41,33 +50,98 @@ export const CATALOG_TEMPLATES: CatalogTemplate[] = [
       {
         name: 'Pollo a la brasa',
         products: [
-          { name: '1/4 de Pollo con Papas', price: 18 },
-          { name: '1/2 Pollo con Papas y Ensalada', price: 34 },
-          { name: '1 Pollo con Papas y Ensalada', price: 62 },
-          { name: 'Mostrito (Pollo + Chaufa)', price: 22 },
+          {
+            name: '1/4 de Pollo con Papas',
+            price: 18,
+            description:
+              'Cuarto de pollo a la brasa jugoso, papas fritas crocantes y cremas de la casa.',
+            image: 'templates/polleria/cuarto-pollo.jpg',
+          },
+          {
+            name: '1/2 Pollo con Papas y Ensalada',
+            price: 34,
+            description:
+              'Medio pollo a la leña con papas fritas y ensalada fresca. Ideal para dos.',
+            image: 'templates/polleria/medio-pollo.jpg',
+          },
+          {
+            name: '1 Pollo con Papas y Ensalada',
+            price: 62,
+            description:
+              'Pollo entero a la brasa, papas familiares y ensalada. Para compartir en familia.',
+            image: 'templates/polleria/pollo-entero.jpg',
+          },
+          {
+            name: 'Mostrito (Pollo + Chaufa)',
+            price: 22,
+            description:
+              'Cuarto de pollo a la brasa con arroz chaufa y papas fritas. El clásico limeño.',
+            image: 'templates/polleria/mostrito.jpg',
+          },
         ],
       },
       {
         name: 'Parrillas',
         products: [
-          { name: 'Anticuchos x2', price: 20 },
-          { name: 'Chuleta a la Parrilla', price: 24 },
+          {
+            name: 'Anticuchos x2',
+            price: 20,
+            description:
+              'Dos palitos de corazón de res marinados al ají panca, con papa dorada y choclo.',
+            image: 'templates/polleria/anticuchos.jpg',
+          },
+          {
+            name: 'Chuleta a la Parrilla',
+            price: 24,
+            description: 'Chuleta de cerdo a la parrilla con papas fritas y ensalada.',
+            image: 'templates/polleria/chuleta.jpg',
+          },
         ],
       },
       {
         name: 'Complementos',
         products: [
-          { name: 'Papas Fritas', price: 10 },
-          { name: 'Ensalada Fresca', price: 8 },
-          { name: 'Yuca Frita', price: 9 },
+          {
+            name: 'Papas Fritas',
+            price: 10,
+            description: 'Porción de papas fritas crocantes.',
+            image: 'templates/polleria/papas-fritas.jpeg',
+          },
+          {
+            name: 'Ensalada Fresca',
+            price: 8,
+            description: 'Lechuga, tomate, pepino y zanahoria con vinagreta de la casa.',
+            image: 'templates/polleria/ensalada-fresca.jpg',
+          },
+          {
+            name: 'Yuca Frita',
+            price: 9,
+            description: 'Yuca dorada con salsa huancaína.',
+            image: 'templates/polleria/yuca-frita.jpg',
+          },
         ],
       },
       {
         name: 'Bebidas',
         products: [
-          { name: 'Chicha Morada (jarra 1L)', price: 18 },
-          { name: 'Inca Kola 500ml', price: 5 },
-          { name: 'Limonada Clásica', price: 8 },
+          {
+            name: 'Chicha Morada (jarra 1L)',
+            price: 18,
+            description: 'Chicha morada casera con piña y canela.',
+            image: 'templates/polleria/chicha-morada.jpg',
+          },
+          {
+            name: 'Inca Kola 500ml',
+            price: 5,
+            description: 'La bebida del sabor del Perú, bien helada.',
+            image: 'templates/polleria/inca-kola.jpg',
+          },
+          {
+            name: 'Limonada Clásica',
+            price: 8,
+            description: 'Limonada natural recién exprimida.',
+            image: 'templates/polleria/limonada.jpg',
+          },
         ],
       },
     ],
@@ -76,7 +150,12 @@ export const CATALOG_TEMPLATES: CatalogTemplate[] = [
         name: 'Cremas',
         appliesTo: ['Pollo a la brasa', 'Parrillas'],
         maxSelect: 3,
-        options: [{ name: 'Ají cremoso' }, { name: 'Mayonesa' }, { name: 'Ketchup' }, { name: 'Mostaza miel' }],
+        options: [
+          { name: 'Ají cremoso' },
+          { name: 'Mayonesa' },
+          { name: 'Ketchup' },
+          { name: 'Mostaza miel' },
+        ],
       },
     ],
   },
@@ -131,7 +210,11 @@ export const CATALOG_TEMPLATES: CatalogTemplate[] = [
         name: 'Tipo de leche',
         appliesTo: ['Cafés'],
         maxSelect: 1,
-        options: [{ name: 'Entera' }, { name: 'Deslactosada' }, { name: 'Almendra', priceDelta: 3 }],
+        options: [
+          { name: 'Entera' },
+          { name: 'Deslactosada' },
+          { name: 'Almendra', priceDelta: 3 },
+        ],
       },
     ],
   },
@@ -177,7 +260,10 @@ export const CATALOG_TEMPLATES: CatalogTemplate[] = [
       {
         name: 'Extras',
         appliesTo: ['Hamburguesas'],
-        options: [{ name: 'Queso extra', priceDelta: 2 }, { name: 'Tocino', priceDelta: 3 }],
+        options: [
+          { name: 'Queso extra', priceDelta: 2 },
+          { name: 'Tocino', priceDelta: 3 },
+        ],
       },
       {
         name: 'Salsas',
@@ -304,7 +390,11 @@ export const CATALOG_TEMPLATES: CatalogTemplate[] = [
       {
         name: 'Extras',
         appliesTo: ['Batidos', 'Ensaladas de fruta'],
-        options: [{ name: 'Granola', priceDelta: 2 }, { name: 'Quinua', priceDelta: 2 }, { name: 'Helado', priceDelta: 3 }],
+        options: [
+          { name: 'Granola', priceDelta: 2 },
+          { name: 'Quinua', priceDelta: 2 },
+          { name: 'Helado', priceDelta: 3 },
+        ],
       },
     ],
   },

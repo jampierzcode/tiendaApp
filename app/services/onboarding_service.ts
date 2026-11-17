@@ -1,4 +1,5 @@
 import Business from '#models/business'
+import BusinessImage from '#models/business_image'
 import Category from '#models/category'
 import CategoryProduct from '#models/category_product'
 import ModifierGroup from '#models/modifier_group'
@@ -10,8 +11,11 @@ import type User from '#models/user'
 import { PAISES, validarWhatsapp, type CodigoPais } from '#services/countries'
 import InventoryService from '#services/inventory_service'
 import SlugService from '#services/slug_service'
+import StorageService from '#services/storage_service'
 import { findTemplate } from '#services/templates/catalog_templates'
+import logger from '@adonisjs/core/services/logger'
 import db from '@adonisjs/lucid/services/db'
+import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 import { DateTime } from 'luxon'
 import { randomUUID } from 'node:crypto'
 
@@ -49,7 +53,10 @@ export default class OnboardingService {
     }
 
     const pais: CodigoPais = input.country ?? 'PE'
-    const errorTelefono = validarWhatsapp(pais, String(input.whatsapp_phone ?? '').replace(/\D/g, ''))
+    const errorTelefono = validarWhatsapp(
+      pais,
+      String(input.whatsapp_phone ?? '').replace(/\D/g, '')
+    )
     if (errorTelefono) throw new Error(errorTelefono)
 
     return db.transaction(async (trx) => {
@@ -116,6 +123,7 @@ export default class OnboardingService {
                 sortOrder: pi,
                 stock: 0,
                 status: 'activo',
+                businessImageId: await OnboardingService.copiarFoto(business.id, item, trx),
               },
               opts
             )
@@ -194,5 +202,41 @@ export default class OnboardingService {
 
       return { business, products }
     })
+  }
+
+  /**
+   * Copia la foto de muestra de la plantilla al espacio del negocio y la
+   * registra en su galería. Si el bucket falla, el plato se crea sin foto:
+   * una imagen no vale una suscripción perdida.
+   */
+  private static async copiarFoto(
+    businessId: number,
+    item: { name: string; image?: string },
+    trx: TransactionClientContract
+  ) {
+    if (!item.image) return null
+
+    const ext = item.image.split('.').pop() ?? 'jpg'
+    const key = StorageService.construirKey(businessId, item.name, ext)
+
+    try {
+      const url = await StorageService.copiar(item.image, key)
+      const image = await BusinessImage.create(
+        {
+          businessId,
+          url,
+          storageKey: key,
+          contentType: StorageService.contentTypePorExtension(key),
+          name: item.name,
+          type: 'producto',
+          status: 'activo',
+        },
+        { client: trx }
+      )
+      return image.id
+    } catch (error) {
+      logger.warn({ err: error, image: item.image }, 'No se pudo copiar la foto de la plantilla')
+      return null
+    }
   }
 }

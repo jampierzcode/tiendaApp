@@ -1,6 +1,7 @@
 import env from '#start/env'
 import { HttpContext } from '@adonisjs/core/http'
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
@@ -81,15 +82,41 @@ export default class StorageService {
     return this.urlPublica(key)
   }
 
+  /**
+   * Copia un objeto dentro del mismo bucket sin bajarlo al servidor. Lo usa
+   * el alta de negocios para darle a cada tienda su propia copia de las fotos
+   * de la plantilla: si el cliente borra la suya, la original sigue ahí.
+   */
+  static async copiar(origen: string, destino: string) {
+    await this.s3.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        Key: destino,
+        CopySource: `${this.bucket}/${origen}`,
+        CacheControl: 'public, max-age=31536000, immutable',
+        MetadataDirective: 'REPLACE',
+        ContentType: this.contentTypePorExtension(destino),
+      })
+    )
+
+    return this.urlPublica(destino)
+  }
+
+  static contentTypePorExtension(key: string) {
+    const ext = key.split('.').pop()?.toLowerCase()
+    if (ext === 'png') return 'image/png'
+    if (ext === 'webp') return 'image/webp'
+    if (ext === 'avif') return 'image/avif'
+    return 'image/jpeg'
+  }
+
   static async eliminar(key: string) {
     await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
   }
 
   /** Lee el objeto para servirlo desde `/media`. */
   static async leer(key: string) {
-    const salida = await this.s3.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: key })
-    )
+    const salida = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }))
 
     return {
       cuerpo: salida.Body as Readable,
