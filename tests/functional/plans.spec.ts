@@ -22,6 +22,22 @@ async function usuario(rolNombre: 'admin' | 'superadmin') {
   })
 }
 
+async function tienda() {
+  const user = await usuario('admin')
+  const business = await Business.create({
+    uuid: randomUUID(),
+    name: 'Mers Test',
+    slug: `m-${randomUUID().slice(0, 8)}`,
+    userId: user.id,
+    status: 'activo',
+    isPublic: true,
+    businessType: 'retail',
+    whatsappPhone: '51987654321',
+    subscriptionStatus: 'active',
+  } as any)
+  return { user, business, base: `/api/b/${business.uuid}` }
+}
+
 async function restaurante() {
   const user = await usuario('admin')
   const business = await Business.create({
@@ -203,5 +219,54 @@ test.group('Planes y suscripciones', (group) => {
     assert.equal(business.subscriptionStatus, 'trial')
     const prueba = await Subscription.findByOrFail('business_id', business.id)
     assert.equal(prueba.interval, 'trial')
+  })
+
+  test('tienda en plan Catálogo: inventario sí; pedidos, envíos y compras no', async ({
+    client,
+  }) => {
+    const t = await tienda()
+    const admin = await usuario('superadmin')
+    const catalogo = await precio('tienda_catalogo', 'month')
+    ;(
+      await client
+        .post(`/api/businesses/${t.business.id}/subscriptions`)
+        .json({ planPriceId: catalogo.id, quantity: 1 })
+        .loginAs(admin)
+    ).assertStatus(201)
+    ;(await client.get(`${t.base}/inventory/low-stock`).loginAs(t.user)).assertStatus(200)
+    ;(await client.get(`${t.base}/products`).loginAs(t.user)).assertStatus(200)
+    const envios = await client.get(`${t.base}/shipments`).loginAs(t.user)
+    envios.assertStatus(403)
+    envios.assertBodyContains({ feature: 'envios' })
+    ;(await client.get(`${t.base}/purchases`).loginAs(t.user)).assertStatus(403)
+    ;(await client.get(`${t.base}/orders`).loginAs(t.user)).assertStatus(403)
+    const tiendaPublica = await client.get(`/api/store/${t.business.slug}`)
+    tiendaPublica.assertBodyContains({ data: { pedidosEnLinea: false } })
+  })
+
+  test('precio especial: Tienda + IA a S/ 60 el mes', async ({ client, assert }) => {
+    const t = await tienda()
+    const admin = await usuario('superadmin')
+    const ia = await precio('tienda_ia', 'month')
+    const r = await client
+      .post(`/api/businesses/${t.business.id}/subscriptions`)
+      .json({ planPriceId: ia.id, quantity: 2, unitPrice: 60, paymentMethod: 'yape' })
+      .loginAs(admin)
+    r.assertStatus(201)
+    assert.equal(r.body().data.unitPrice, 60)
+    assert.equal(r.body().data.total, 120)
+    ;(await client.get(`${t.base}/purchases`).loginAs(t.user)).assertStatus(200)
+    ;(await client.get(`${t.base}/whatsapp`).loginAs(t.user)).assertStatus(200)
+  })
+
+  test('restaurante con plan Pedidos conserva los envíos', async ({ client }) => {
+    const t = await restaurante()
+    const admin = await usuario('superadmin')
+    const pedidos = await precio('restaurante_pedidos', 'month')
+    await client
+      .post(`/api/businesses/${t.business.id}/subscriptions`)
+      .json({ planPriceId: pedidos.id, quantity: 1 })
+      .loginAs(admin)
+    ;(await client.get(`${t.base}/shipments`).loginAs(t.user)).assertStatus(200)
   })
 })

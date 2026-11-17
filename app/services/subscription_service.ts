@@ -14,6 +14,8 @@ export type AsignarInput = {
   quantity: number
   /** Sin cobro: queda en el historial con total 0. */
   courtesy?: boolean
+  /** Precio pactado por mes/año para este cliente; si no, el de lista. */
+  unitPrice?: number | null
   paymentMethod?: string | null
   paymentReference?: string | null
   notes?: string | null
@@ -80,7 +82,11 @@ export default class SubscriptionService {
         precio.interval === 'year'
           ? inicio.plus({ years: cantidad })
           : inicio.plus({ months: cantidad })
-      const unitario = input.courtesy ? 0 : Number(precio.price)
+      const unitario = input.courtesy
+        ? 0
+        : input.unitPrice !== undefined && input.unitPrice !== null
+          ? Math.round(Number(input.unitPrice) * 100) / 100
+          : Number(precio.price)
 
       const sub = await Subscription.create(
         {
