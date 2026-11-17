@@ -26,13 +26,15 @@ export const EVENTOS: EventoPedido[] = [
 ]
 
 const PLANTILLAS: Record<EventoPedido, string> = {
-  recibido: '¡Hola {{cliente}}! 👋 Recibimos tu pedido {{codigo}} por {{total}}. En breve lo confirmamos.',
+  recibido:
+    '¡Hola {{cliente}}! 👋 Recibimos tu pedido {{codigo}} por {{total}}. En breve lo confirmamos.',
   confirmado: '✅ {{cliente}}, tu pedido {{codigo}} fue confirmado. Ya lo estamos organizando.',
   preparando: '👨‍🍳 Tu pedido {{codigo}} se está preparando.',
   listo: '🔔 ¡Tu pedido {{codigo}} está listo! {{entrega}}',
   enviado: '🛵 Tu pedido {{codigo}} va en camino.',
   entregado: '🎉 Pedido {{codigo}} entregado. ¡Gracias por elegirnos, {{cliente}}!',
-  cancelado: 'Lo sentimos {{cliente}}, tu pedido {{codigo}} fue cancelado. Escríbenos si tienes dudas.',
+  cancelado:
+    'Lo sentimos {{cliente}}, tu pedido {{codigo}} fue cancelado. Escríbenos si tienes dudas.',
 }
 
 /**
@@ -66,8 +68,7 @@ export default class NotificationService {
     if (!sesion || sesion.desired !== 'connected') return
 
     const simbolo = business.currencySymbol || 'S/'
-    const entrega =
-      order.deliveryMethod === 'recojo' ? 'Puedes pasar a recogerlo.' : ''
+    const entrega = order.deliveryMethod === 'recojo' ? 'Puedes pasar a recogerlo.' : ''
 
     const cuerpo = this.plantillaDe(business, evento)
       .replaceAll('{{cliente}}', order.customerName)
@@ -106,6 +107,10 @@ export default class NotificationService {
     business: Business,
     m: { orderId?: number | null; phone: string; event: string; body: string; automatic: boolean }
   ) {
+    // Avisos por WhatsApp: solo si el plan incluye WhatsApp conectado.
+    if (business.planId && !business.currentPlan) await business.load('currentPlan')
+    if (!business.tieneFuncion('whatsapp')) return
+
     const phone = this.normalizarTelefono(m.phone, business.whatsappPhone)
     await WhatsappOutbox.create({
       businessId: business.id,

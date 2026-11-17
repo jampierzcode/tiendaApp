@@ -300,10 +300,12 @@ export default class WhatsappBotController {
     if (!this.autorizado(ctx)) return
 
     const sesiones = await WhatsappSession.all()
-    const negocios = await Business.query().whereIn(
-      'id',
-      sesiones.map((s) => s.businessId)
-    )
+    const negocios = await Business.query()
+      .whereIn(
+        'id',
+        sesiones.map((s) => s.businessId)
+      )
+      .preload('currentPlan')
     const porId = new Map(negocios.map((b) => [b.id, b]))
 
     return {
@@ -315,7 +317,10 @@ export default class WhatsappBotController {
         // y vuelve solo, sin escanear, cuando renueva.
         const enPausa =
           s.desired === 'connected' &&
-          (!negocio || negocio.status !== 'activo' || negocio.subscriptionExpired)
+          (!negocio ||
+            negocio.status !== 'activo' ||
+            negocio.subscriptionExpired ||
+            !negocio.tieneFuncion('whatsapp'))
         return {
           businessUuid: negocio?.uuid,
           desired: enPausa ? 'paused' : s.desired,
@@ -467,7 +472,10 @@ export default class WhatsappBotController {
       )
       .slice(0, 3)
       .map((i: any) => ({ mime: String(i.mime), data: String(i.data) }))
-    const business = await Business.findBy('uuid', businessUuid)
+    const business = await Business.query()
+      .where('uuid', businessUuid)
+      .preload('currentPlan')
+      .first()
     if (!business) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
 
     const telefono = String(phone ?? '')
@@ -509,13 +517,15 @@ export default class WhatsappBotController {
 
     let salida: { reply: string | null; media: { url: string; caption?: string }[] } | null = null
     try {
-      salida = await SalesAgentService.responder(
-        business,
-        telefono,
-        paraModelo,
-        entrante.id,
-        imagenes
-      )
+      // El vendedor IA es del plan más alto; sin él contestan las reglas fijas.
+      if (business.tieneFuncion('vendedor_ia'))
+        salida = await SalesAgentService.responder(
+          business,
+          telefono,
+          paraModelo,
+          entrante.id,
+          imagenes
+        )
     } catch (error) {
       logger.error(
         { err: error, business: business.id },
@@ -556,7 +566,12 @@ export default class WhatsappBotController {
   public async ownerMessage(ctx: HttpContext) {
     if (!this.autorizado(ctx)) return
     const { request, response } = ctx
-    const { businessUuid, phone, text, pause } = request.only(['businessUuid', 'phone', 'text', 'pause'])
+    const { businessUuid, phone, text, pause } = request.only([
+      'businessUuid',
+      'phone',
+      'text',
+      'pause',
+    ])
     const business = await Business.findBy('uuid', businessUuid)
     if (!business) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
 

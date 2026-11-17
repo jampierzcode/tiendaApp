@@ -1,8 +1,6 @@
 import Business from '#models/business'
 import User from '#models/user'
 import CatalogCloneService from '#services/catalog_clone_service'
-import vine from '@vinejs/vine'
-import { DateTime } from 'luxon'
 import { randomUUID } from 'node:crypto'
 import type { HttpContext } from '@adonisjs/core/http'
 
@@ -19,12 +17,19 @@ export default class BusinessesController {
 
   /** Listado global. Solo superadmin (lo impone el middleware de rol). */
   public async index({}: HttpContext) {
-    const businesses = await Business.query().preload('user').orderBy('id', 'desc')
+    const businesses = await Business.query()
+      .preload('user')
+      .preload('currentPlan')
+      .orderBy('id', 'desc')
     return { status: 'success', data: businesses }
   }
 
   public async show({ params, auth, response }: HttpContext) {
-    const business = await Business.query().where('id', params.id).preload('user').firstOrFail()
+    const business = await Business.query()
+      .where('id', params.id)
+      .preload('user')
+      .preload('currentPlan')
+      .firstOrFail()
 
     if (!(await this.canManage(auth, business))) {
       return response.forbidden({ status: 'error', message: 'No tienes acceso a este negocio' })
@@ -92,13 +97,17 @@ export default class BusinessesController {
   public async getByUser({ auth }: HttpContext) {
     const businesses = await Business.query()
       .where('user_id', auth.user!.id)
+      .preload('currentPlan')
       .orderBy('id', 'asc')
 
     return { status: 'success', data: businesses }
   }
 
   public async getByUuid({ params, auth, response }: HttpContext) {
-    const business = await Business.findBy('uuid', params.uuid)
+    const business = await Business.query()
+      .where('uuid', params.uuid)
+      .preload('currentPlan')
+      .first()
 
     if (!business) {
       return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
@@ -140,49 +149,5 @@ export default class BusinessesController {
     } catch (error) {
       return response.unprocessableEntity({ status: 'error', message: (error as Error).message })
     }
-  }
-
-  /**
-   * Operación comercial sobre la suscripción de un negocio. Solo superadmin.
-   *
-   *  - activate: marca como pagado `months` meses más (suma si aún está vigente).
-   *  - extend:   regala `days` de prueba; reabre el panel si estaba vencido.
-   *  - expire:   suspende ya (impago, baja).
-   */
-  public async updateSubscription({ params, request }: HttpContext) {
-    const data = await request.validateUsing(
-      vine.compile(
-        vine.object({
-          action: vine.enum(['activate', 'extend', 'expire']),
-          plan: vine.string().trim().maxLength(60).optional(),
-          months: vine.number().min(1).max(36).optional(),
-          days: vine.number().min(1).max(365).optional(),
-        })
-      )
-    )
-    const business = await Business.findOrFail(params.id)
-    const now = DateTime.now()
-
-    if (data.action === 'activate') {
-      const vigente =
-        business.subscriptionStatus === 'active' && business.paidUntil && business.paidUntil > now
-      const base = vigente ? business.paidUntil! : now
-      business.subscriptionStatus = 'active'
-      business.paidUntil = base.plus({ months: data.months ?? 1 })
-      if (data.plan) business.plan = data.plan
-    } else if (data.action === 'extend') {
-      const base =
-        business.subscriptionStatus === 'trial' && business.trialEndsAt && business.trialEndsAt > now
-          ? business.trialEndsAt
-          : now
-      business.subscriptionStatus = 'trial'
-      business.trialEndsAt = base.plus({ days: data.days ?? 7 })
-    } else {
-      business.subscriptionStatus = 'expired'
-    }
-
-    await business.save()
-
-    return { status: 'success', message: 'Suscripción actualizada', data: business }
   }
 }

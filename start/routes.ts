@@ -59,6 +59,9 @@ import ModifierGroupsController from '#controllers/modifier_groups_controller'
 import IngredientsController from '#controllers/ingredients_controller'
 import RecipesController from '#controllers/recipes_controller'
 import SubscriptionsController from '#controllers/subscriptions_controller'
+import PlansController from '#controllers/plans_controller'
+import BusinessSubscriptionsController from '#controllers/business_subscriptions_controller'
+import MyPlanController from '#controllers/my_plan_controller'
 import WhatsappBotController, { WhatsappPanelController } from '#controllers/whatsapp_controller'
 
 router.get('/', async () => ({ hello: 'world' }))
@@ -79,6 +82,7 @@ router.post('/api/register', [AuthController, 'register']).as('auth.register')
 
 // Suscripción con wizard: plantillas por rubro y alta de dueño + negocio (7 días gratis).
 router.get('/api/subscribe/templates', [SubscriptionsController, 'templates'])
+router.get('/api/subscribe/plans', [PlansController, 'publicIndex'])
 router.post('/api/subscribe', [SubscriptionsController, 'subscribe']).as('subscribe')
 
 /*
@@ -95,12 +99,12 @@ router
     router.get('/filters', [StorefrontController, 'filters']).as('store.filters')
     router.get('/facets', [StorefrontController, 'facets']).as('store.facets')
     router.get('/menu', [StorefrontController, 'menu']).as('store.menu')
-    router
-      .get('/orders/:code', [StorefrontController, 'orderTracking'])
-      .as('store.orders.tracking')
+    router.get('/orders/:code', [StorefrontController, 'orderTracking']).as('store.orders.tracking')
     router.get('/products', [StorefrontController, 'products']).as('store.products')
     router.get('/products/:productSlug', [StorefrontController, 'product']).as('store.product')
-    router.get('/products/:productSlug/related', [StorefrontController, 'related']).as('store.related')
+    router
+      .get('/products/:productSlug/related', [StorefrontController, 'related'])
+      .as('store.related')
     router.get('/promotions', [StorefrontController, 'promotions']).as('store.promotions')
     router.post('/quote', [StorefrontController, 'quote']).as('store.quote')
     router.post('/orders', [StorefrontController, 'createOrder']).as('store.orders.create')
@@ -166,7 +170,9 @@ router
 
     // Negocios del propio usuario
     router.get('/businesses/byUser', [BusinessesController, 'getByUser']).as('business.byUser')
-    router.get('/businesses/byUuid/:uuid', [BusinessesController, 'getByUuid']).as('business.byUuid')
+    router
+      .get('/businesses/byUuid/:uuid', [BusinessesController, 'getByUuid'])
+      .as('business.byUuid')
     router.post('/businesses', [BusinessesController, 'store']).as('business.store')
     // Otro negocio para la misma cuenta, con wizard y prueba gratis.
     router.post('/account/businesses', [SubscriptionsController, 'addBusiness'])
@@ -184,7 +190,21 @@ router
     router.get('/businesses', [BusinessesController, 'index']).as('business.index')
     router.delete('/businesses/:id', [BusinessesController, 'destroy']).as('business.destroy')
     router.post('/businesses/:id/clone-catalog', [BusinessesController, 'cloneCatalog'])
-    router.put('/businesses/:id/subscription', [BusinessesController, 'updateSubscription'])
+
+    // Planes y suscripciones (historial de cobros por negocio)
+    router.get('/plans', [PlansController, 'index'])
+    router.get('/plans/features', [PlansController, 'features'])
+    router.post('/plans', [PlansController, 'store'])
+    router.put('/plans/:id', [PlansController, 'update'])
+    router.delete('/plans/:id', [PlansController, 'destroy'])
+    router.get('/businesses/:id/subscriptions', [BusinessSubscriptionsController, 'index'])
+    router.post('/businesses/:id/subscriptions', [BusinessSubscriptionsController, 'store'])
+    router.post('/businesses/:id/trial', [BusinessSubscriptionsController, 'trial'])
+    router.post('/subscriptions/:subscriptionId/cancel', [
+      BusinessSubscriptionsController,
+      'cancel',
+    ])
+    router.get('/subscriptions', [BusinessSubscriptionsController, 'all'])
 
     router.get('/users/admins', [UsersController, 'admins'])
     router.get('/users', [UsersController, 'index']).as('users.index')
@@ -277,7 +297,10 @@ router
     router.put('/whatsapp/agent', [WhatsappPanelController, 'saveAgent'])
     router.get('/seller-config', [WhatsappPanelController, 'sellerConfig'])
     router.put('/seller-config', [WhatsappPanelController, 'saveSellerConfig'])
-    router.post('/whatsapp/conversations/:contact/resume-agent', [WhatsappPanelController, 'resumeAgent'])
+    router.post('/whatsapp/conversations/:contact/resume-agent', [
+      WhatsappPanelController,
+      'resumeAgent',
+    ])
     router.get('/whatsapp/unread', [WhatsappPanelController, 'unread'])
     router.get('/whatsapp/conversations', [WhatsappPanelController, 'conversations'])
     router.get('/whatsapp/conversations/:contact', [WhatsappPanelController, 'messages'])
@@ -403,6 +426,7 @@ router
     router.put('/customers/:id', [CustomersController, 'update'])
 
     // Configuración de la tienda pública
+    router.get('/plan', [MyPlanController, 'show'])
     router.get('/store-settings', [StoreSettingsController, 'show'])
     router.put('/store-settings', [StoreSettingsController, 'update'])
 

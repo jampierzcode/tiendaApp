@@ -45,6 +45,7 @@ export default class StorefrontController {
       .andWhere('is_public', true)
       .andWhere('status', 'activo')
       .preload('bannerImage')
+      .preload('currentPlan')
       .first()
   }
 
@@ -76,6 +77,9 @@ export default class StorefrontController {
         freeShippingFrom:
           business.freeShippingFrom === null ? null : Number(business.freeShippingFrom),
         aceptaPedidos: business.puedeVender,
+        // Plan Carta: sin pedidos en línea; el carrito arma el mensaje y abre WhatsApp.
+        pedidosEnLinea: business.tieneFuncion('pedidos_online'),
+        cuentasCliente: business.tieneFuncion('cuentas_cliente'),
         phone: business.phone,
         whatsappPhone: business.whatsappPhone,
         address: business.address,
@@ -87,7 +91,6 @@ export default class StorefrontController {
       },
     }
   }
-
 
   /**
    * Menú digital: platos agrupados por categoría, cada uno con sus grupos de
@@ -114,9 +117,9 @@ export default class StorefrontController {
     const reglas = await ProductModifierGroup.query()
       .where('business_id', business.id)
       .preload('group', (g) =>
-        g.where('is_active', true).preload('options', (o) =>
-          o.where('is_active', true).orderBy('sort_order', 'asc')
-        )
+        g
+          .where('is_active', true)
+          .preload('options', (o) => o.where('is_active', true).orderBy('sort_order', 'asc'))
       )
       .orderBy('sort_order', 'asc')
 
@@ -421,7 +424,11 @@ export default class StorefrontController {
     }
 
     // Categorías: cuentan sobre lo buscado, sin importar la categoría elegida.
-    const idsCategorias = await this.idsDelCatalogo(business, request, ['categoria', 'etiqueta', 'atributos'])
+    const idsCategorias = await this.idsDelCatalogo(business, request, [
+      'categoria',
+      'etiqueta',
+      'atributos',
+    ])
     const idsAtributos = await this.idsDelCatalogo(business, request, ['atributos'])
     const idsEtiquetas = await this.idsDelCatalogo(business, request, ['etiqueta'])
 
@@ -458,7 +465,14 @@ export default class StorefrontController {
       .andWhere('a.is_filterable', true)
       .whereIn('v.product_id', idsAtributos.length ? idsAtributos : [0])
       .groupBy('a.id', 'a.name', 'a.type', 'av.id', 'av.value', 'av.hex_color')
-      .select('a.id as attr_id', 'a.name as attr_name', 'a.type as attr_type', 'av.id as value_id', 'av.value', 'av.hex_color')
+      .select(
+        'a.id as attr_id',
+        'a.name as attr_name',
+        'a.type as attr_type',
+        'av.id as value_id',
+        'av.value',
+        'av.hex_color'
+      )
       .countDistinct('v.product_id as total')
       .orderBy('a.id')
       .orderBy('av.value')
@@ -466,7 +480,12 @@ export default class StorefrontController {
     const atributos = new Map<number, any>()
     for (const f of filasAtributos as any[]) {
       if (!atributos.has(f.attr_id)) {
-        atributos.set(f.attr_id, { id: f.attr_id, name: f.attr_name, type: f.attr_type, values: [] })
+        atributos.set(f.attr_id, {
+          id: f.attr_id,
+          name: f.attr_name,
+          type: f.attr_type,
+          values: [],
+        })
       }
       atributos.get(f.attr_id).values.push({
         id: f.value_id,
@@ -539,10 +558,10 @@ export default class StorefrontController {
     await this.filtrar(query, business.id, request)
 
     const orden: Record<string, [string, 'asc' | 'desc']> = {
-      recientes: ['id', 'desc'],
+      'recientes': ['id', 'desc'],
       'precio-asc': ['price', 'asc'],
       'precio-desc': ['price', 'desc'],
-      nombre: ['name', 'asc'],
+      'nombre': ['name', 'asc'],
     }
     const [columna, direccion] = orden[sort] ?? orden.recientes
     query.orderBy(columna, direccion)
@@ -594,7 +613,7 @@ export default class StorefrontController {
         .whereNotIn('id', excluir)
         .whereHas('categoryLinks', (l) => l.whereIn(columna, ids))
         .preload('businessImages')
-          .preload('tags')
+        .preload('tags')
         .preload('categoryLinks', (l) => l.preload('category').preload('subcategory'))
         .preload('variations', (v) => {
           v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
@@ -610,7 +629,10 @@ export default class StorefrontController {
     await cargar('category_id', catIds)
 
     const promos = await PromotionService.activas(business.id)
-    return { status: 'success', data: elegidos.map((p) => this.resumenProducto(p, business, promos)) }
+    return {
+      status: 'success',
+      data: elegidos.map((p) => this.resumenProducto(p, business, promos)),
+    }
   }
 
   /** Ficha del producto, con sus variaciones y stock real. */
@@ -633,7 +655,9 @@ export default class StorefrontController {
         v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
         v.preload('businessImage')
       })
-      .preload('gallery', (g) => g.preload('image').orderBy('sort_order', 'asc').orderBy('id', 'asc'))
+      .preload('gallery', (g) =>
+        g.preload('image').orderBy('sort_order', 'asc').orderBy('id', 'asc')
+      )
       .first()
 
     if (!product) {
@@ -654,7 +678,12 @@ export default class StorefrontController {
 
     const promos = await PromotionService.activas(business.id)
     const categoryIds = product.categoryLinks.map((l) => l.categoryId)
-    const precio = PromotionService.precioPublico(promos, product.id, categoryIds, Number(product.price))
+    const precio = PromotionService.precioPublico(
+      promos,
+      product.id,
+      categoryIds,
+      Number(product.price)
+    )
 
     return {
       status: 'success',
@@ -726,6 +755,14 @@ export default class StorefrontController {
       })
     }
 
+    if (!business.tieneFuncion('pedidos_online')) {
+      return response.unprocessableEntity({
+        status: 'error',
+        code: 'solo_whatsapp',
+        message: 'Esta tienda recibe los pedidos por WhatsApp',
+      })
+    }
+
     const datos = request.only([
       'customerName',
       'customerPhone',
@@ -756,7 +793,10 @@ export default class StorefrontController {
           const user = auth.user!
           await user.load('role')
           if (user.role?.name === 'cliente') {
-            await Customer.query().where('id', order.customerId).whereNull('user_id').update({ user_id: user.id })
+            await Customer.query()
+              .where('id', order.customerId)
+              .whereNull('user_id')
+              .update({ user_id: user.id })
           }
         }
       } catch {
@@ -796,14 +836,21 @@ export default class StorefrontController {
     const nombres = await PromotionService.nombresDestinos(business.id, promos)
 
     // Para enlazar la oferta: un único producto o una única categoría.
-    const ids = (p: Discount, kind: string) => (p.targets ?? []).filter((t) => t.kind === kind).map((t) => t.targetId)
+    const ids = (p: Discount, kind: string) =>
+      (p.targets ?? []).filter((t) => t.kind === kind).map((t) => t.targetId)
     const productos = await Product.query()
       .where('business_id', business.id)
-      .whereIn('id', promos.flatMap((p) => ids(p, 'product')))
+      .whereIn(
+        'id',
+        promos.flatMap((p) => ids(p, 'product'))
+      )
       .select('id', 'slug')
     const categorias = await Category.query()
       .where('business_id', business.id)
-      .whereIn('id', promos.flatMap((p) => ids(p, 'category')))
+      .whereIn(
+        'id',
+        promos.flatMap((p) => ids(p, 'category'))
+      )
       .select('id', 'slug')
     const slugProducto = new Map(productos.map((p) => [p.id, p.slug]))
     const slugCategoria = new Map(categorias.map((c) => [c.id, c.slug]))
@@ -811,7 +858,9 @@ export default class StorefrontController {
     return {
       status: 'success',
       data: promos.map((p) => {
-        const destinos = (p.targets ?? []).map((t) => nombres.get(`${t.kind}:${t.targetId}`)).filter(Boolean) as string[]
+        const destinos = (p.targets ?? [])
+          .map((t) => nombres.get(`${t.kind}:${t.targetId}`))
+          .filter(Boolean) as string[]
         const unico = (p.targets ?? []).length === 1 ? p.targets[0] : null
         return {
           id: p.id,
@@ -826,12 +875,20 @@ export default class StorefrontController {
               : destinos.length <= 2
                 ? destinos.join(' y ')
                 : `${destinos.slice(0, 2).join(', ')} y ${destinos.length - 2} más`,
-          product: unico?.kind === 'product' && slugProducto.get(unico.targetId)
-            ? { name: nombres.get(`product:${unico.targetId}`)!, slug: slugProducto.get(unico.targetId)! }
-            : null,
-          category: unico?.kind === 'category' && slugCategoria.get(unico.targetId)
-            ? { name: nombres.get(`category:${unico.targetId}`)!, slug: slugCategoria.get(unico.targetId)! }
-            : null,
+          product:
+            unico?.kind === 'product' && slugProducto.get(unico.targetId)
+              ? {
+                  name: nombres.get(`product:${unico.targetId}`)!,
+                  slug: slugProducto.get(unico.targetId)!,
+                }
+              : null,
+          category:
+            unico?.kind === 'category' && slugCategoria.get(unico.targetId)
+              ? {
+                  name: nombres.get(`category:${unico.targetId}`)!,
+                  slug: slugCategoria.get(unico.targetId)!,
+                }
+              : null,
           dias: PromotionService.diasTexto(p),
           endDate: p.endDate ? p.endDate.toISODate() : null,
         }
@@ -894,14 +951,22 @@ export default class StorefrontController {
       v,
       p: PromotionService.precioPublico(promos, product.id, categoryIds, Number(v.price), v.id),
     }))
-    const base = PromotionService.precioPublico(promos, product.id, categoryIds, Number(product.price))
-    const masBarata = precios.length ? precios.reduce((a, b) => (b.p.final < a.p.final ? b : a)) : null
+    const base = PromotionService.precioPublico(
+      promos,
+      product.id,
+      categoryIds,
+      Number(product.price)
+    )
+    const masBarata = precios.length
+      ? precios.reduce((a, b) => (b.p.final < a.p.final ? b : a))
+      : null
     const precio = masBarata ? masBarata.p : base
     const desde = precios.length > 1 && new Set(precios.map((x) => x.p.final)).size > 1
 
     // Etiquetas de todas las promociones que tocan al producto o a alguna de sus variaciones.
     const vistas = new Map<number, { id: number; name: string; label: string }>()
-    for (const e of [...base.etiquetas, ...precios.flatMap((x) => x.p.etiquetas)]) vistas.set(e.id, e)
+    for (const e of [...base.etiquetas, ...precios.flatMap((x) => x.p.etiquetas)])
+      vistas.set(e.id, e)
     const etiquetas = [...vistas.values()]
 
     const stockTotal = product.unlimitedStock
@@ -927,7 +992,9 @@ export default class StorefrontController {
       slug: product.slug,
       sku: product.sku,
       categoria:
-        product.categoryLinks?.[0]?.subcategory?.name ?? product.categoryLinks?.[0]?.category?.name ?? null,
+        product.categoryLinks?.[0]?.subcategory?.name ??
+        product.categoryLinks?.[0]?.category?.name ??
+        null,
       imageUrl: product.businessImages?.url ?? null,
       price: precio.final,
       originalPrice: precio.descuento > 0 ? precio.original : null,

@@ -55,6 +55,8 @@ export default await Env.create(new URL('../', import.meta.url), {
   /** Asistente de ventas con IA del WhatsApp (OpenAI). Sin clave, el bot usa sus reglas fijas. */
   OPENAI_API_KEY: Env.schema.string.optional(),
   OPENAI_MODEL: Env.schema.string.optional(),
+  /** WhatsApp de soporte para renovar planes ("Mi plan" del dueño). Solo dígitos con código de país. */
+  SUPPORT_WHATSAPP: Env.schema.string.optional(),
   OPENAI_BASE_URL: Env.schema.string.optional(),
   /** Admin key de OpenAI (solo lectura de costos reales en el superadmin). */
   OPENAI_ADMIN_KEY: Env.schema.string.optional(),

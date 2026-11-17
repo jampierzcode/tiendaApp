@@ -1,4 +1,5 @@
 import Business from '#models/business'
+import { FUNCIONES, funcionDeRuta } from '#services/plan_features'
 import type { HttpContext } from '@adonisjs/core/http'
 import type { NextFn } from '@adonisjs/core/types/http'
 
@@ -39,7 +40,10 @@ export default class TenantMiddleware {
       })
     }
 
-    const business = await Business.findBy('uuid', businessUuid)
+    const business = await Business.query()
+      .where('uuid', businessUuid)
+      .preload('currentPlan')
+      .first()
 
     if (!business) {
       return ctx.response.notFound({ status: 'error', message: 'Negocio no encontrado' })
@@ -73,6 +77,20 @@ export default class TenantMiddleware {
         code: 'subscription_expired',
         message: 'Tu suscripción está vencida. Activa tu plan para seguir operando.',
       })
+    }
+
+    // Funciones del plan: cada recurso del panel exige la suya (ver plan_features.ts).
+    if (!isSuperAdmin) {
+      const recurso = ctx.request.url().split(`/api/b/${businessUuid}/`)[1] ?? ''
+      const funcion = funcionDeRuta(recurso)
+      if (funcion && !business.tieneFuncion(funcion)) {
+        return ctx.response.forbidden({
+          status: 'error',
+          code: 'plan_required',
+          feature: funcion,
+          message: `«${FUNCIONES[funcion].label}» no está incluido en tu plan. Mejora tu plan para usarlo.`,
+        })
+      }
     }
 
     ctx.business = business

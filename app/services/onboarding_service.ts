@@ -4,6 +4,7 @@ import Category from '#models/category'
 import CategoryProduct from '#models/category_product'
 import ModifierGroup from '#models/modifier_group'
 import ModifierOption from '#models/modifier_option'
+import Plan from '#models/plan'
 import Product from '#models/product'
 import ProductModifierGroup from '#models/product_modifier_group'
 import ProductVariation from '#models/product_variation'
@@ -12,6 +13,7 @@ import { PAISES, validarWhatsapp, type CodigoPais } from '#services/countries'
 import InventoryService from '#services/inventory_service'
 import SlugService from '#services/slug_service'
 import StorageService from '#services/storage_service'
+import SubscriptionService from '#services/subscription_service'
 import { findTemplate } from '#services/templates/catalog_templates'
 import logger from '@adonisjs/core/services/logger'
 import db from '@adonisjs/lucid/services/db'
@@ -198,6 +200,17 @@ export default class OnboardingService {
             }
           }
         }
+      }
+
+      // La prueba gratis es del plan más completo del rubro: quien ya usó la
+      // cocina y el vendedor IA difícilmente baja al plan más barato.
+      const planPrueba = await Plan.query({ client: trx })
+        .where('is_active', true)
+        .where('business_type', input.business_type)
+        .orderBy('sort_order', 'desc')
+        .first()
+      if (planPrueba) {
+        await SubscriptionService.iniciarPrueba(business, planPrueba, TRIAL_DAYS, owner.id, trx)
       }
 
       return { business, products }

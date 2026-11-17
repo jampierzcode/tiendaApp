@@ -8,6 +8,8 @@ import Order from './order.js'
 import Customer from './customer.js'
 import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 import SlugService from '#services/slug_service'
+import Plan from './plan.js'
+import { TODAS_LAS_FUNCIONES, type Funcion } from '#services/plan_features'
 
 export default class Business extends BaseModel {
   @column({ isPrimary: true })
@@ -150,9 +152,16 @@ export default class Business extends BaseModel {
   @column.dateTime()
   declare trialEndsAt: DateTime | null
 
-  /** Plan contratado (texto libre del superadmin: "Mensual", "Anual"…). */
+  /** Nombre del plan vigente (copia de `plans.name`, o texto libre de antes de los planes). */
+  @column({ columnName: 'plan' })
+  declare planLabel: string | null
+
+  /** Plan vigente. Null = negocio anterior a los planes: acceso completo. */
   @column()
-  declare plan: string | null
+  declare planId: number | null
+
+  @belongsTo(() => Plan)
+  declare currentPlan: BelongsTo<typeof Plan>
 
   /** Hasta cuándo está pagado. Null = sin vencimiento. */
   @column.dateTime()
@@ -243,6 +252,20 @@ export default class Business extends BaseModel {
     const fin = this.subscriptionStatus === 'trial' ? this.trialEndsAt : this.paidUntil
     if (!fin) return null
     return Math.ceil(fin.diffNow('days').days)
+  }
+
+  /**
+   * Funciones que el negocio puede usar. Sin plan asignado (negocios de antes
+   * de los planes) tiene todas. Requiere `currentPlan` precargado si hay plan.
+   */
+  @computed()
+  get funciones(): Funcion[] {
+    if (!this.planId) return [...TODAS_LAS_FUNCIONES]
+    return this.currentPlan?.features ?? []
+  }
+
+  tieneFuncion(funcion: Funcion) {
+    return this.funciones.includes(funcion)
   }
 
   /** ¿Está lista para recibir pedidos? */
