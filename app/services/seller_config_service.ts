@@ -101,7 +101,7 @@ export interface ConfigVendedor {
   emojis: 'ninguno' | 'pocos' | 'muchos'
   palabrasEvitar: string
   fotos: 'siempre' | 'cuando_ayude' | 'nunca'
-  saludo: { activo: boolean; modo: 'exacto' | 'exacto_responde' | 'adaptado'; texto: string }
+  saludo: SaludoConfig
   faqs: PreguntaFrecuente[]
   ejemplo: string
   derivarCuando: string[]
@@ -109,6 +109,28 @@ export interface ConfigVendedor {
   sedes: Sede[]
   restaurante: ConfigRestaurante
 }
+
+/** Archivo que acompaña al saludo (catálogo en PDF, lista de precios…). */
+export interface DocumentoSaludo {
+  /** Ruta relativa /media/businesses/<id>/… */
+  url: string
+  nombre: string
+  /** Enlace público completo (se fija al guardar desde el panel, con su dominio). */
+  enlace?: string
+}
+
+export interface SaludoConfig {
+  activo: boolean
+  modo: 'exacto' | 'exacto_responde' | 'adaptado'
+  texto: string
+  documento: DocumentoSaludo | null
+  /** «archivo»: se manda el documento; «enlace»: va el enlace dentro del saludo. */
+  documentoComo: 'archivo' | 'enlace'
+  /** Productos cuya foto (con nombre y precio) sale junto al saludo. Máximo 5. */
+  productos: number[]
+}
+
+export const MAX_PRODUCTOS_SALUDO = 5
 
 export const DATOS_SUGERIDOS = [
   'Nombre completo',
@@ -131,7 +153,14 @@ export const CONFIG_POR_DEFECTO: ConfigVendedor = {
   emojis: 'pocos',
   palabrasEvitar: '',
   fotos: 'siempre',
-  saludo: { activo: false, modo: 'adaptado', texto: '' },
+  saludo: {
+    activo: false,
+    modo: 'adaptado',
+    texto: '',
+    documento: null,
+    documentoComo: 'archivo',
+    productos: [],
+  },
   faqs: [],
   ejemplo: '',
   derivarCuando: ['Problema con el pago', 'Devolución o cambio', 'Queja grave'],
@@ -192,6 +221,20 @@ export default class SellerConfigService {
     return this.limpiarZonas(parse(business.shippingZones, []))
   }
 
+  /** Solo archivos subidos a nuestro bucket (ruta /media/businesses/…). */
+  static limpiarDocumento(d: any): DocumentoSaludo | null {
+    const url = String(d?.url ?? '')
+      .trim()
+      .replace(/^https?:\/\/[^/]+(?=\/media\/businesses\/)/, '')
+    if (!/^\/media\/businesses\/\d+\/[A-Za-z0-9._-]+$/.test(url)) return null
+    const enlace = String(d?.enlace ?? '')
+    return {
+      url,
+      nombre: texto(d?.nombre, 120) || 'Catálogo',
+      ...(/^https?:\/\/[^/\s]+$/.test(enlace.slice(0, -url.length)) && enlace.endsWith(url) ? { enlace } : {}),
+    }
+  }
+
   static limpiarConfig(crudo: any): ConfigVendedor {
     const c = crudo && typeof crudo === 'object' ? crudo : {}
     const d = CONFIG_POR_DEFECTO
@@ -212,6 +255,15 @@ export default class SellerConfigService {
           d.saludo.modo
         ),
         texto: texto(c.saludo?.texto, 1500),
+        documento: this.limpiarDocumento(c.saludo?.documento),
+        documentoComo: uno(c.saludo?.documentoComo, ['archivo', 'enlace'] as const, 'archivo'),
+        productos: [
+          ...new Set(
+            (Array.isArray(c.saludo?.productos) ? c.saludo.productos : [])
+              .map(Number)
+              .filter((n: number) => Number.isInteger(n) && n > 0)
+          ),
+        ].slice(0, MAX_PRODUCTOS_SALUDO) as number[],
       },
       faqs: (Array.isArray(c.faqs) ? c.faqs : [])
         .slice(0, 100)

@@ -297,6 +297,8 @@ router
     router.put('/whatsapp/agent', [WhatsappPanelController, 'saveAgent'])
     router.get('/seller-config', [WhatsappPanelController, 'sellerConfig'])
     router.put('/seller-config', [WhatsappPanelController, 'saveSellerConfig'])
+    router.post('/seller-config/greeting-document', [WhatsappPanelController, 'uploadGreetingDocument'])
+    router.get('/seller-config/greeting-products', [WhatsappPanelController, 'greetingProducts'])
     router.post('/whatsapp/conversations/:contact/resume-agent', [
       WhatsappPanelController,
       'resumeAgent',

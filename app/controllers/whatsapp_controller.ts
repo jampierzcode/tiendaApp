@@ -4,7 +4,7 @@ import WhatsappOutbox from '#models/whatsapp_outbox'
 import WhatsappSession from '#models/whatsapp_session'
 import NotificationService, { EVENTOS } from '#services/notification_service'
 import SellerConfigService, { DATOS_SUGERIDOS } from '#services/seller_config_service'
-import SalesAgentService from '#services/sales_agent_service'
+import SalesAgentService, { type RespuestaAgente } from '#services/sales_agent_service'
 import WhatsappAgentPause from '#models/whatsapp_agent_pause'
 import logger from '@adonisjs/core/services/logger'
 import Business from '#models/business'
@@ -14,6 +14,19 @@ import env from '#start/env'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
 import type { HttpContext } from '@adonisjs/core/http'
+import Product from '#models/product'
+import StorageService from '#services/storage_service'
+import { readFile } from 'node:fs/promises'
+
+const TIPOS_DOCUMENTO: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
 
 /**
  * Panel del negocio: conectar su número, ver el QR y editar las plantillas.
@@ -96,7 +109,26 @@ export class WhatsappPanelController {
   public async saveSellerConfig({ business, request }: HttpContext) {
     const config = request.input('config')
     if (config && typeof config === 'object') {
-      business.aiAgentConfig = JSON.stringify(SellerConfigService.limpiarConfig(config))
+      const limpia = SellerConfigService.limpiarConfig(config)
+      // El documento y los productos del saludo tienen que ser de este negocio.
+      if (limpia.saludo.documento && !limpia.saludo.documento.url.startsWith(`/media/businesses/${business.id}/`)) {
+        limpia.saludo.documento = null
+      }
+      // El panel llega por el dominio público de la API: con él se arma el enlace
+      // que ve el cliente (el bot puede llamar por una dirección interna).
+      if (limpia.saludo.documento) {
+        limpia.saludo.documento.enlace =
+          StorageService.urlAbsoluta(limpia.saludo.documento.url) ?? undefined
+      }
+      if (limpia.saludo.productos.length) {
+        const propios = await Product.query()
+          .where('business_id', business.id)
+          .whereIn('id', limpia.saludo.productos)
+          .select('id')
+        const ids = new Set(propios.map((p) => p.id))
+        limpia.saludo.productos = limpia.saludo.productos.filter((id) => ids.has(id))
+      }
+      business.aiAgentConfig = JSON.stringify(limpia)
     }
     const zonas = request.input('zonas')
     if (Array.isArray(zonas)) {
@@ -109,6 +141,108 @@ export class WhatsappPanelController {
       data: {
         config: SellerConfigService.config(business),
         zonas: SellerConfigService.zonas(business),
+      },
+    }
+  }
+
+  /**
+   * Sube el documento del saludo (catálogo en PDF, lista de precios…). Queda
+   * en el bucket y se sirve por /media como las fotos; se guarda con
+   * «Guardar cambios» del vendedor.
+   */
+  public async uploadGreetingDocument({ business, request, response }: HttpContext) {
+    const archivo = request.file('documento', {
+      size: '16mb',
+      extnames: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'],
+    })
+    if (!archivo) {
+      return response.unprocessableEntity({ status: 'error', message: 'No se recibió el archivo' })
+    }
+    if (!archivo.isValid) {
+      return response.unprocessableEntity({
+        status: 'error',
+        message:
+          archivo.errors[0]?.type === 'size'
+            ? 'El archivo pesa más de 16 MB'
+            : 'Formato no permitido: sube un PDF, Word, Excel o PowerPoint',
+      })
+    }
+    const ext = (archivo.extname ?? 'pdf').toLowerCase()
+    const key = StorageService.construirKey(business.id, archivo.clientName, ext)
+    const url = await StorageService.subir(
+      key,
+      await readFile(archivo.tmpPath!),
+      TIPOS_DOCUMENTO[ext] ?? 'application/octet-stream'
+    )
+    return {
+      status: 'success',
+      message: 'Documento subido',
+      data: { url, nombre: archivo.clientName.slice(0, 120) },
+    }
+  }
+
+  /**
+   * Productos para acompañar el saludo: se sugieren los más vendidos de los
+   * últimos 90 días (con foto y activos) y, si faltan, los más nuevos.
+   */
+  public async greetingProducts({ business }: HttpContext) {
+    const elegidos = SellerConfigService.config(business).saludo.productos
+    const ventas = await db
+      .from('order_items')
+      .join('orders', 'orders.id', 'order_items.order_id')
+      .where('order_items.business_id', business.id)
+      .whereNotNull('order_items.product_id')
+      .whereNotIn('orders.status', ['cancelado', 'devuelto'])
+      .where('orders.created_at', '>', DateTime.now().minus({ days: 90 }).toSQL()!)
+      .groupBy('order_items.product_id')
+      .select('order_items.product_id')
+      .sum('order_items.quantity as vendidos')
+      .orderBy('vendidos', 'desc')
+      .limit(30)
+    const vendidos = new Map<number, number>(ventas.map((v: any) => [Number(v.product_id), Number(v.vendidos)]))
+
+    const conFoto = () =>
+      Product.query()
+        .where('business_id', business.id)
+        .andWhere('status', 'activo')
+        .whereNotNull('business_image_id')
+        .preload('businessImages')
+        .preload('variations')
+    const masVendidos = vendidos.size ? await conFoto().whereIn('id', [...vendidos.keys()]) : []
+    masVendidos.sort((a, b) => (vendidos.get(b.id) ?? 0) - (vendidos.get(a.id) ?? 0))
+    const sugeridos = masVendidos.slice(0, 8)
+    if (sugeridos.length < 8) {
+      const nuevos = await conFoto()
+        .if(sugeridos.length, (q) => q.whereNotIn('id', sugeridos.map((p) => p.id)))
+        .orderBy('id', 'desc')
+        .limit(8 - sugeridos.length)
+      sugeridos.push(...nuevos)
+    }
+    const faltan = elegidos.filter((id) => !sugeridos.some((p) => p.id === id))
+    const otros = faltan.length
+      ? await Product.query()
+          .where('business_id', business.id)
+          .whereIn('id', faltan)
+          .preload('businessImages')
+          .preload('variations')
+      : []
+
+    const fila = (p: Product) => ({
+      id: p.id,
+      nombre: p.name,
+      precio: SalesAgentService.precioDesde(p),
+      foto: p.businessImages?.url ?? null,
+      activo: p.status === 'activo',
+      vendidos: vendidos.get(p.id) ?? 0,
+    })
+    return {
+      status: 'success',
+      data: {
+        sugeridos: sugeridos.map(fila),
+        elegidos: elegidos
+          .map((id) => [...sugeridos, ...otros].find((p) => p.id === id))
+          .filter((p): p is Product => Boolean(p))
+          .map(fila),
       },
     }
   }
@@ -515,7 +649,7 @@ export default class WhatsappBotController {
           )
         : crudo
 
-    let salida: { reply: string | null; media: { url: string; caption?: string }[] } | null = null
+    let salida: RespuestaAgente | null = null
     try {
       // El vendedor IA es del plan más alto; sin él contestan las reglas fijas.
       if (business.tieneFuncion('vendedor_ia'))
@@ -543,18 +677,20 @@ export default class WhatsappBotController {
       salida = { reply: regla, media: [] }
     }
 
-    for (const m of salida.media) {
-      await NotificationService.registrar(
+    // Mismo orden en que el bot los manda: fotos, texto y lo que va tras el texto.
+    const anotar = (m: RespuestaAgente['media'][number]) =>
+      NotificationService.registrar(
         business.id,
         telefono,
         'out',
-        `📷 ${m.caption ?? 'Foto'}`,
+        m.tipo === 'documento' ? `📄 ${m.nombre ?? 'Documento'}` : `📷 ${m.caption ?? 'Foto'}`,
         true
       )
-    }
+    for (const m of salida.media.filter((x) => !x.trasTexto)) await anotar(m)
     if (salida.reply) {
       await NotificationService.registrar(business.id, telefono, 'out', salida.reply, true)
     }
+    for (const m of salida.media.filter((x) => x.trasTexto)) await anotar(m)
 
     return { status: 'success', reply: salida.reply, media: salida.media }
   }

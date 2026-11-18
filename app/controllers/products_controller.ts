@@ -9,6 +9,8 @@ import SlugService from '#services/slug_service'
 import Subcategory from '#models/subcategory'
 import Tag from '#models/tag'
 import type { HttpContext } from '@adonisjs/core/http'
+import BusinessImage from '#models/business_image'
+import StorageService from '#services/storage_service'
 import db from '@adonisjs/lucid/services/db'
 import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 
@@ -22,15 +24,28 @@ type CategoryLinkInput = { categoryId: number; subcategoryId?: number | null }
  */
 export default class ProductsController {
   /** Preguntas frecuentes del formulario: solo pares completos, recortados, máx. 20. */
-  static limpiarFaqs(entrada: unknown): ProductFaq[] {
+  static async limpiarFaqs(businessId: number, entrada: unknown): Promise<ProductFaq[]> {
     if (!Array.isArray(entrada)) return []
-    return entrada
+    const faqs = entrada
       .map((f: any) => ({
         pregunta: String(f?.pregunta ?? '').trim().slice(0, 300),
         respuesta: String(f?.respuesta ?? '').trim().slice(0, 1000),
+        imagenId: Number(f?.imagenId) > 0 ? Number(f.imagenId) : null,
       }))
       .filter((f) => f.pregunta && f.respuesta)
       .slice(0, 20)
+
+    // La foto tiene que ser de la galería de este negocio; se guarda su URL relativa.
+    const ids = [...new Set(faqs.map((f) => f.imagenId).filter((x): x is number => Boolean(x)))]
+    const fotos = ids.length
+      ? await BusinessImage.query().where('business_id', businessId).whereIn('id', ids)
+      : []
+    const urls = new Map(fotos.map((i) => [i.id, StorageService.urlRelativa(i.url)]))
+    return faqs.map((f) =>
+      f.imagenId && urls.has(f.imagenId)
+        ? { ...f, imagenUrl: urls.get(f.imagenId)! }
+        : { pregunta: f.pregunta, respuesta: f.respuesta }
+    )
   }
 
   /**
@@ -249,7 +264,7 @@ export default class ProductsController {
           businessImageId: data.business_image_id ?? null,
           status: data.status === 'inactivo' ? 'inactivo' : 'activo',
           unlimitedStock: Boolean(request.input('unlimited_stock', false)),
-          aiFaqs: ProductsController.limpiarFaqs(request.input('ai_faqs')),
+          aiFaqs: await ProductsController.limpiarFaqs(business.id, request.input('ai_faqs')),
           stock: 0,
         },
         { client: trx }
@@ -609,7 +624,7 @@ export default class ProductsController {
       aiFaqs:
         request.input('ai_faqs') === undefined
           ? product.aiFaqs
-          : ProductsController.limpiarFaqs(request.input('ai_faqs')),
+          : await ProductsController.limpiarFaqs(business.id, request.input('ai_faqs')),
     })
 
     try {

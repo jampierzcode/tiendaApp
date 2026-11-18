@@ -7,8 +7,15 @@ import ProductVariation from './product_variation.js'
 import CategoryProduct from './category_product.js'
 import Tag from './tag.js'
 import ProductImage from './product_image.js'
+import StorageService from '#services/storage_service'
 
-export type ProductFaq = { pregunta: string; respuesta: string }
+/** Pregunta frecuente del producto; la foto (opcional) es de la galería del negocio. */
+export type ProductFaq = {
+  pregunta: string
+  respuesta: string
+  imagenId?: number | null
+  imagenUrl?: string | null
+}
 
 export default class Product extends BaseModel {
   @column({ isPrimary: true })
@@ -72,6 +79,9 @@ export default class Product extends BaseModel {
         return []
       }
     },
+    // Al panel la foto le llega con dominio, igual que las de la galería.
+    serialize: (v: ProductFaq[]) =>
+      (v ?? []).map((f) => (f.imagenUrl ? { ...f, imagenUrl: StorageService.urlAbsoluta(f.imagenUrl) } : f)),
   })
   declare aiFaqs: ProductFaq[]
 

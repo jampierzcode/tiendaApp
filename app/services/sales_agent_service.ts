@@ -1,4 +1,5 @@
 import type Business from '#models/business'
+import BusinessImage from '#models/business_image'
 import Category from '#models/category'
 import Customer from '#models/customer'
 import ModifierOption from '#models/modifier_option'
@@ -41,6 +42,12 @@ import { DateTime } from 'luxon'
 export interface MediaSalida {
   url: string
   caption?: string
+  /** Por defecto 'imagen'. Un documento (PDF…) sale como archivo adjunto. */
+  tipo?: 'imagen' | 'documento'
+  /** Nombre del archivo que ve el cliente (solo documentos). */
+  nombre?: string
+  /** Se manda DESPUÉS del texto (lo que acompaña al saludo), no como su descripción. */
+  trasTexto?: boolean
 }
 
 export interface RespuestaAgente {
@@ -138,8 +145,12 @@ export default class SalesAgentService {
     const saludo = cfg.saludo.activo && cfg.saludo.texto ? this.rellenar(cfg.saludo.texto, business) : ''
     const primero = Boolean(saludo) && (await this.esPrimerMensaje(business.id, phone, mensajeId))
 
+    // Lo que acompaña al saludo: catálogo (archivo o enlace) y fotos de productos elegidos.
+    const extras = primero ? await this.extrasSaludo(business, cfg) : { enlace: '', media: [] }
+    const saludoCompleto = extras.enlace ? `${saludo}\n\n${extras.enlace}` : saludo
+
     // Saludo exacto sin responder: sale tal cual y la pregunta se atiende en el siguiente mensaje.
-    if (primero && cfg.saludo.modo === 'exacto') return { reply: saludo, media: [] }
+    if (primero && cfg.saludo.modo === 'exacto') return { reply: saludoCompleto, media: extras.media }
 
     const ctx: Contexto = { business, phone, media: [], pedidoCreado: null, imagenes }
     const messages: MensajeChat[] = [
@@ -149,7 +160,8 @@ export default class SalesAgentService {
           business,
           phone,
           cfg,
-          primero && cfg.saludo.modo === 'adaptado' ? saludo : null
+          primero && cfg.saludo.modo === 'adaptado' ? saludoCompleto : null,
+          extras.media
         ),
       },
       ...(await this.historial(business.id, phone, mensajeId)),
@@ -204,9 +216,63 @@ export default class SalesAgentService {
 
     let reply = final ? this.formatoWhatsapp(final) : null
     if (primero && cfg.saludo.modo === 'exacto_responde') {
-      reply = reply ? `${saludo}\n\n${reply}` : saludo
+      reply = reply ? `${saludoCompleto}\n\n${reply}` : saludoCompleto
     }
-    return { reply, media: ctx.media }
+    return { reply, media: [...ctx.media, ...extras.media] }
+  }
+
+  /** Precio «desde» de un producto (el más bajo de sus variaciones). */
+  static precioDesde(p: Product) {
+    const propias = (p.variations ?? []).filter((v) => !v.isDefault)
+    const precios = (propias.length ? propias : (p.variations ?? [])).map((v) => Number(v.price))
+    return precios.length ? Math.min(...precios) : Number(p.price)
+  }
+
+  /**
+   * Documento y fotos de productos que el dueño eligió para el saludo. Van
+   * después del texto, cada uno con su descripción (nombre y precio).
+   */
+  private static async extrasSaludo(business: Business, cfg: ConfigVendedor) {
+    const media: MediaSalida[] = []
+    let enlace = ''
+    const doc = cfg.saludo.documento
+    if (doc) {
+      if (cfg.saludo.documentoComo === 'enlace') {
+        enlace = `📄 ${doc.nombre}: ${doc.enlace ?? StorageService.urlAbsoluta(doc.url)}`
+      } else {
+        media.push({ url: doc.url, tipo: 'documento', nombre: doc.nombre, caption: doc.nombre, trasTexto: true })
+      }
+    }
+
+    const ids = cfg.saludo.productos
+    if (ids.length) {
+      const simbolo = business.currencySymbol || 'S/'
+      const promos = await PromotionService.activas(business.id)
+      const productos = await Product.query()
+        .where('business_id', business.id)
+        .whereIn('id', ids)
+        .andWhere('status', 'activo')
+        .preload('businessImages')
+        .preload('categoryLinks')
+        .preload('variations')
+      for (const id of ids) {
+        const p = productos.find((x) => x.id === id)
+        if (!p?.businessImages?.url) continue
+        const variado = new Set((p.variations ?? []).filter((v) => !v.isDefault).map((v) => Number(v.price))).size > 1
+        const precio = PromotionService.precioPublico(
+          promos,
+          p.id,
+          p.categoryLinks.map((l) => l.categoryId),
+          this.precioDesde(p)
+        ).final
+        media.push({
+          url: p.businessImages.url,
+          caption: `*${p.name}*\n${variado ? 'Desde ' : ''}${simbolo}${Number(precio).toFixed(2)}`,
+          trasTexto: true,
+        })
+      }
+    }
+    return { enlace, media }
   }
 
   /** ¿Es lo primero que escribe este cliente (no hay mensajes anteriores)? */
@@ -315,7 +381,8 @@ export default class SalesAgentService {
     business: Business,
     phone: string,
     cfg: ConfigVendedor,
-    saludoAdaptado: string | null
+    saludoAdaptado: string | null,
+    extrasSaludo: MediaSalida[] = []
   ) {
     const simbolo = business.currencySymbol || 'S/'
     const base = (env.get('STORE_PUBLIC_URL') ?? '').replace(/\/$/, '')
@@ -442,7 +509,7 @@ export default class SalesAgentService {
 
 PERSONALIDAD
 ${personalidad}
-${saludoAdaptado ? `\nEs el PRIMER mensaje de este cliente: salúdalo con este saludo, dicho con tus palabras (mantén la información y los enlaces), y luego responde lo que haya preguntado:\n«${saludoAdaptado}»\n` : ''}
+${saludoAdaptado ? `\nEs el PRIMER mensaje de este cliente: salúdalo con este saludo, dicho con tus palabras (mantén la información y los enlaces), y luego responde lo que haya preguntado:\n«${saludoAdaptado}»\n` : ''}${extrasSaludo.length ? `\nJunto con tu saludo se enviarán solos: ${extrasSaludo.map((m) => (m.tipo === 'documento' ? `el documento «${m.nombre}»` : `la foto de ${m.caption?.split('\n')[0].replace(/\*/g, '')}`)).join(', ')}. Puedes mencionarlos («te dejo nuestro catálogo y algunos favoritos»), pero no los vuelvas a enviar.\n` : ''}
 Fecha y hora actual: ${ahora.toFormat("cccc d 'de' LLLL yyyy, HH:mm")}.
 ${cliente ? `Este cliente ya compró antes: se llama ${cliente.name}${cliente.address ? `, su última dirección fue ${[cliente.address, cliente.city].filter(Boolean).join(', ')}` : ''}. Llámale por su nombre y confirma si la dirección sigue igual antes de usarla.` : 'Es un cliente nuevo o no lo tenemos registrado.'}
 
@@ -497,7 +564,8 @@ FORMATO (WhatsApp, no Markdown)
           ctx,
           Number(args?.productoId),
           args?.variacionId ? Number(args.variacionId) : null,
-          Math.min(3, Math.max(1, Number(args?.cuantas ?? 1) || 1))
+          Math.min(3, Math.max(1, Number(args?.cuantas ?? 1) || 1)),
+          args?.preguntaNumero ? Number(args.preguntaNumero) : null
         )
       case 'cotizar_pedido':
         return this.cotizar(ctx.business, args)
@@ -676,7 +744,16 @@ FORMATO (WhatsApp, no Markdown)
       promociones: precio.etiquetas,
       tieneFoto: Boolean(p.businessImageId),
       // Respuestas que el dueño dejó para este producto: úsalas tal cual.
-      preguntasFrecuentes: p.aiFaqs?.length ? p.aiFaqs : undefined,
+      preguntasFrecuentes: p.aiFaqs?.length
+        ? p.aiFaqs.map((f, i) => ({
+            numero: i + 1,
+            pregunta: f.pregunta,
+            respuesta: f.respuesta,
+            ...(f.imagenId
+              ? { tieneFoto: true, nota: `Al responder esta, envía su foto: enviar_foto_producto con preguntaNumero ${i + 1}.` }
+              : {}),
+          }))
+        : undefined,
     }
 
     if (business.esRestaurante) {
@@ -725,7 +802,8 @@ FORMATO (WhatsApp, no Markdown)
     ctx: Contexto,
     productoId: number,
     variacionId: number | null,
-    cuantas = 1
+    cuantas = 1,
+    preguntaNumero: number | null = null
   ) {
     const p = await Product.query()
       .where('business_id', ctx.business.id)
@@ -735,6 +813,18 @@ FORMATO (WhatsApp, no Markdown)
       .preload('gallery', (g) => g.preload('image').orderBy('sort_order', 'asc').orderBy('id', 'asc'))
       .first()
     if (!p) return { enviada: false, nota: 'Producto no encontrado.' }
+
+    // Foto de una pregunta frecuente (p. ej. «¿cómo se ve puesto?»).
+    if (preguntaNumero) {
+      const faq = p.aiFaqs?.[preguntaNumero - 1]
+      const foto = faq?.imagenId
+        ? await BusinessImage.query().where('business_id', ctx.business.id).andWhere('id', faq.imagenId).first()
+        : null
+      if (!foto) return { enviada: false, nota: 'Esa pregunta no tiene foto.' }
+      if (ctx.media.length >= 4) return { enviada: false, nota: 'Ya enviaste varias fotos en este mensaje.' }
+      ctx.media.push({ url: foto.url, caption: p.name })
+      return { enviadas: 1, nota: 'La foto se enviará junto con tu respuesta; no pegues enlaces.' }
+    }
 
     const variacion = variacionId ? p.variations.find((v) => v.id === variacionId) : null
     const de = (principal: string | null | undefined, vid: number | null) =>
@@ -1355,6 +1445,11 @@ const TOOLS = [
             type: 'number',
             description:
               'Cuántas fotos de la galería mandar (1 a 3). Usa 2-3 si pide "más fotos", "cómo se ve de espalda", etc.',
+          },
+          preguntaNumero: {
+            type: 'number',
+            description:
+              'Opcional: el "numero" de una pregunta frecuente de ver_producto que tiene foto; manda esa foto en vez de la del producto.',
           },
         },
         required: ['productoId'],
