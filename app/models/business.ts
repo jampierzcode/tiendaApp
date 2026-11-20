@@ -262,10 +262,24 @@ export default class Business extends BaseModel {
    * Funciones que el negocio puede usar. Sin plan asignado (negocios de antes
    * de los planes) tiene todas. Requiere `currentPlan` precargado si hay plan.
    */
+  /** Complementos contratados aparte del plan (p. ej. Inventario sobre PDV). JSON. */
+  @column({
+    serializeAs: 'extraFeatures',
+    prepare: (v: unknown) => (v === null || v === undefined ? null : JSON.stringify(v)),
+    consume: (v: string | null) => {
+      try {
+        return v ? (JSON.parse(v) as Funcion[]) : []
+      } catch {
+        return []
+      }
+    },
+  })
+  declare extraFeatures: Funcion[]
+
   @computed()
   get funciones(): Funcion[] {
     if (!this.planId) return [...TODAS_LAS_FUNCIONES]
-    return this.currentPlan?.features ?? []
+    return [...new Set([...(this.currentPlan?.features ?? []), ...(this.extraFeatures ?? [])])]
   }
 
   tieneFuncion(funcion: Funcion) {

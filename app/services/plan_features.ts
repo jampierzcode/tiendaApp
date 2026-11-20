@@ -79,8 +79,9 @@ export const FUNCIONES = {
     rubro: null as Rubro,
   },
   insumos: {
-    label: 'Insumos y recetas',
-    detalle: 'Costo por plato y descuento de inventario.',
+    label: 'Inventario',
+    detalle:
+      'Insumos, recetas y preparaciones, compras a proveedores, conteo físico, mermas y reportes de costo.',
     rubro: 'restaurant' as Rubro,
   },
   compras: {
@@ -107,6 +108,7 @@ export function esFuncion(valor: unknown): valor is Funcion {
 export const REGLAS_RUTA: { patron: RegExp; funcion: Funcion }[] = [
   { patron: /^products\/\d+\/recipe/, funcion: 'insumos' },
   { patron: /^(ingredients|recipes)(\/|$)/, funcion: 'insumos' },
+  { patron: /^stock\//, funcion: 'insumos' },
   { patron: /^discounts(\/|$)/, funcion: 'promociones' },
   { patron: /^seller-config(\/|$)/, funcion: 'vendedor_ia' },
   { patron: /^whatsapp\/(agent|seller-config)/, funcion: 'vendedor_ia' },
@@ -123,6 +125,14 @@ export const REGLAS_RUTA: { patron: RegExp; funcion: Funcion }[] = [
     funcion: 'pedidos_online',
   },
 ]
+
+/**
+ * Complementos que se venden aparte del plan (precio mensual de referencia).
+ * El superadmin los activa por negocio; el plan que ya los incluye no los cobra.
+ */
+export const COMPLEMENTOS: Partial<Record<Funcion, { label: string; precio: number }>> = {
+  insumos: { label: 'Inventario', precio: 10 },
+}
 
 export function funcionDeRuta(recurso: string): Funcion | null {
   return REGLAS_RUTA.find((r) => r.patron.test(recurso))?.funcion ?? null

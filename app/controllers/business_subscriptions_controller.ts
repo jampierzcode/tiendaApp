@@ -1,6 +1,7 @@
 import Business from '#models/business'
 import Subscription from '#models/subscription'
 import SubscriptionService, { SubscriptionError } from '#services/subscription_service'
+import { COMPLEMENTOS, esFuncion } from '#services/plan_features'
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
 import vine from '@vinejs/vine'
@@ -34,7 +35,21 @@ export default class BusinessSubscriptionsController {
       .preload('creator', (q) => q.select('id', 'name', 'email'))
       .orderBy('starts_at', 'desc')
       .orderBy('id', 'desc')
-    return { status: 'success', data: { business, subscriptions: historial } }
+    return {
+      status: 'success',
+      data: { business, subscriptions: historial, complementos: COMPLEMENTOS },
+    }
+  }
+
+  /** Activa o quita complementos (p. ej. Inventario +S/10) a un negocio. */
+  public async addons({ params, request }: HttpContext) {
+    const business = await Business.findOrFail(params.id)
+    const pedidas = ((request.input('features') ?? []) as unknown[]).filter(
+      (f): f is keyof typeof COMPLEMENTOS => esFuncion(f) && f in COMPLEMENTOS
+    )
+    business.extraFeatures = [...new Set(pedidas)]
+    await business.save()
+    return { status: 'success', data: { extraFeatures: business.extraFeatures } }
   }
 
   /** Registra un pago: precio × cantidad de meses o años. */

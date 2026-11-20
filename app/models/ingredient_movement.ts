@@ -8,6 +8,10 @@ export type TipoMovimientoInsumo =
   | 'merma'
   | 'consumo'
   | 'devolucion'
+  /** Producción de una preparación (entra) o lo que se usó para hacerla (sale). */
+  | 'produccion'
+  /** Diferencia de un conteo físico. */
+  | 'conteo'
 
 export default class IngredientMovement extends BaseModel {
   @column({ isPrimary: true })

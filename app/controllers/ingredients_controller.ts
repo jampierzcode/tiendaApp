@@ -9,6 +9,30 @@ const UNIDADES = ['kg', 'g', 'l', 'ml', 'und', 'porcion']
 /**
  * Insumos del restaurante: lo que realmente se compra y se agota.
  */
+/** Campos del inventario que se pueden editar en cualquier momento. */
+function camposExtra(request: HttpContext['request']) {
+  const out: Record<string, unknown> = {}
+  const cat = request.input('category')
+  if (cat !== undefined)
+    out.category =
+      String(cat ?? '')
+        .trim()
+        .slice(0, 60) || null
+  const kind = request.input('kind')
+  if (kind !== undefined) out.kind = kind === 'preparacion' ? 'preparacion' : 'insumo'
+  const pu = request.input('purchaseUnit')
+  if (pu !== undefined)
+    out.purchaseUnit =
+      String(pu ?? '')
+        .trim()
+        .slice(0, 20) || null
+  const pf = request.input('purchaseFactor')
+  if (pf !== undefined) out.purchaseFactor = Math.max(0.0001, Number(pf) || 1)
+  const y = request.input('yieldQty')
+  if (y !== undefined) out.yieldQty = Number(y) > 0 ? Number(y) : null
+  return out
+}
+
 export default class IngredientsController {
   public async index({ business, request }: HttpContext) {
     const search = String(request.input('search') ?? '').trim()
@@ -33,6 +57,8 @@ export default class IngredientsController {
         stock: Number(i.stock),
         minStock: Number(i.minStock),
         avgCost: Number(i.avgCost),
+        purchaseFactor: Number(i.purchaseFactor ?? 1),
+        yieldQty: i.yieldQty === null ? null : Number(i.yieldQty),
         value: Math.round(Math.max(Number(i.stock), 0) * Number(i.avgCost) * 100) / 100,
         low: i.isActive && Number(i.stock) <= Number(i.minStock),
         recipesCount: usoPorInsumo.get(i.id) ?? 0,
@@ -52,7 +78,10 @@ export default class IngredientsController {
 
     const nombre = String(name ?? '').trim()
     if (!nombre) {
-      return response.unprocessableEntity({ status: 'error', message: 'El insumo necesita un nombre' })
+      return response.unprocessableEntity({
+        status: 'error',
+        message: 'El insumo necesita un nombre',
+      })
     }
     if (!UNIDADES.includes(unit)) {
       return response.unprocessableEntity({ status: 'error', message: 'Unidad no válida' })
@@ -78,6 +107,7 @@ export default class IngredientsController {
           minStock: Number(minStock ?? 0) || 0,
           stock: 0,
           avgCost: 0,
+          ...camposExtra(request),
         },
         { client: trx }
       )
@@ -108,14 +138,21 @@ export default class IngredientsController {
       .andWhere('id', params.id)
       .firstOrFail()
 
-    const { name, unit, minStock, isActive } = request.only(['name', 'unit', 'minStock', 'isActive'])
+    const { name, unit, minStock, isActive } = request.only([
+      'name',
+      'unit',
+      'minStock',
+      'isActive',
+    ])
 
     if (unit !== undefined && unit !== insumo.unit) {
       if (!UNIDADES.includes(unit)) {
         return response.unprocessableEntity({ status: 'error', message: 'Unidad no válida' })
       }
       // Cambiar kg por g con movimientos y recetas hechas corrompería las cantidades.
-      const hayHistorial = await IngredientMovement.query().where('ingredient_id', insumo.id).first()
+      const hayHistorial = await IngredientMovement.query()
+        .where('ingredient_id', insumo.id)
+        .first()
       if (hayHistorial) {
         return response.unprocessableEntity({
           status: 'error',
@@ -127,12 +164,16 @@ export default class IngredientsController {
 
     if (name !== undefined) {
       if (!String(name).trim()) {
-        return response.unprocessableEntity({ status: 'error', message: 'El insumo necesita un nombre' })
+        return response.unprocessableEntity({
+          status: 'error',
+          message: 'El insumo necesita un nombre',
+        })
       }
       insumo.name = String(name).trim()
     }
     if (minStock !== undefined) insumo.minStock = Number(minStock) || 0
     if (isActive !== undefined) insumo.isActive = Boolean(isActive)
+    insumo.merge(camposExtra(request))
 
     await insumo.save()
     return { status: 'success', data: insumo }
@@ -144,7 +185,11 @@ export default class IngredientsController {
       .andWhere('id', params.id)
       .firstOrFail()
 
-    const enRecetas = await db.from('recipe_lines').where('ingredient_id', insumo.id).count('* as t').first()
+    const enRecetas = await db
+      .from('recipe_lines')
+      .where('ingredient_id', insumo.id)
+      .count('* as t')
+      .first()
     if (Number(enRecetas?.t ?? 0) > 0) {
       return response.unprocessableEntity({
         status: 'error',
@@ -161,10 +206,18 @@ export default class IngredientsController {
    * (conteo físico) y el sistema calcula la diferencia.
    */
   public async addMovement({ business, params, request, response, auth }: HttpContext) {
-    const { type, quantity, unitCost, note } = request.only(['type', 'quantity', 'unitCost', 'note'])
+    const { type, quantity, unitCost, note } = request.only([
+      'type',
+      'quantity',
+      'unitCost',
+      'note',
+    ])
 
     if (!['compra', 'ajuste', 'merma'].includes(type)) {
-      return response.unprocessableEntity({ status: 'error', message: 'Tipo de movimiento no válido' })
+      return response.unprocessableEntity({
+        status: 'error',
+        message: 'Tipo de movimiento no válido',
+      })
     }
     const cantidad = Number(quantity)
     if (!Number.isFinite(cantidad) || cantidad < 0 || (type !== 'ajuste' && cantidad === 0)) {
@@ -190,7 +243,9 @@ export default class IngredientsController {
           type,
           quantity: delta,
           unitCost:
-            type === 'compra' && unitCost !== undefined && unitCost !== '' ? Number(unitCost) : null,
+            type === 'compra' && unitCost !== undefined && unitCost !== ''
+              ? Number(unitCost)
+              : null,
           note: note ? String(note).slice(0, 255) : null,
           userId: auth.user?.id ?? null,
           trx,

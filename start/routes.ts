@@ -64,6 +64,7 @@ import BusinessSubscriptionsController from '#controllers/business_subscriptions
 import MyPlanController from '#controllers/my_plan_controller'
 import WhatsappBotController, { WhatsappPanelController } from '#controllers/whatsapp_controller'
 import SalonController, { PosDeviceController } from '#controllers/salon_controller'
+import StockController from '#controllers/stock_controller'
 
 router.get('/', async () => ({ hello: 'world' }))
 
@@ -211,6 +212,7 @@ router
     router.get('/businesses/:id/subscriptions', [BusinessSubscriptionsController, 'index'])
     router.post('/businesses/:id/subscriptions', [BusinessSubscriptionsController, 'store'])
     router.post('/businesses/:id/trial', [BusinessSubscriptionsController, 'trial'])
+    router.put('/businesses/:id/addons', [BusinessSubscriptionsController, 'addons'])
     router.post('/subscriptions/:subscriptionId/cancel', [
       BusinessSubscriptionsController,
       'cancel',
@@ -461,6 +463,24 @@ router
     router.put('/salon/staff/:id', [SalonController, 'saveStaff'])
     router.delete('/salon/staff/:id', [SalonController, 'deleteStaff'])
     router.get('/salon/authorizations', [SalonController, 'authorizationLog'])
+
+    // Inventario del restaurante (función «insumos»)
+    router.get('/stock/suppliers', [StockController, 'suppliers'])
+    router.post('/stock/suppliers', [StockController, 'createSupplier'])
+    router.get('/stock/purchases', [StockController, 'purchases'])
+    router.post('/stock/purchases', [StockController, 'createPurchase'])
+    router.post('/stock/purchases/:id/void', [StockController, 'voidPurchase'])
+    router.get('/stock/preparations/:id', [StockController, 'components'])
+    router.put('/stock/preparations/:id', [StockController, 'saveComponents'])
+    router.post('/stock/preparations/:id/produce', [StockController, 'produce'])
+    router.get('/stock/counts', [StockController, 'counts'])
+    router.post('/stock/counts', [StockController, 'openCount'])
+    router.get('/stock/counts/:id', [StockController, 'count'])
+    router.put('/stock/counts/:id', [StockController, 'saveCount'])
+    router.post('/stock/counts/:id/close', [StockController, 'closeCount'])
+    router.delete('/stock/counts/:id', [StockController, 'discardCount'])
+    router.get('/stock/movements', [StockController, 'movements'])
+    router.get('/stock/reports', [StockController, 'reports'])
 
     // Proveedores y compras
     router.get('/suppliers', [SuppliersController, 'index'])
