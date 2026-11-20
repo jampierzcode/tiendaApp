@@ -419,6 +419,18 @@ export default class SalonController {
     return { status: 'success', data: jobs }
   }
 
+  /** Descarta tickets que se quedaron en cola (por ejemplo, de horas atrás). */
+  async discardJobs(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    const ids = ((ctx.request.input('ids') ?? []) as unknown[]).map(Number).filter(Boolean)
+    await PrintJob.query()
+      .where('business_id', ctx.business.id)
+      .whereIn('id', ids)
+      .whereIn('status', ['pendiente', 'error'])
+      .update({ status: 'descartado' })
+    return { status: 'success' }
+  }
+
   async reprint(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
     const job = await PrintJob.query()
@@ -511,11 +523,18 @@ export default class SalonController {
       StaffService.equipos(ctx.business),
       PosSettingsService.leer(ctx.business),
     ])
+    const areasComedor = await db
+      .from('dining_areas')
+      .where('business_id', b)
+      .orderBy('sort_order', 'asc')
+      .orderBy('id', 'asc')
+      .select('id', 'name', 'sort_order as sortOrder')
     return {
       status: 'success',
       data: {
         printers,
         areas,
+        areasComedor,
         tables,
         staff,
         categories: categories.map((c) => ({
@@ -831,12 +850,16 @@ export default class SalonController {
         .trim()
         .slice(0, 40)
       if (!name) throw new OrderError('Escribe el nombre o número de la mesa')
-      const zone = ctx.request.input('zone', t.zone ?? null)
+      const area = await this.areaComedor(
+        ctx,
+        ctx.request.input('diningAreaId', t.diningAreaId ?? null)
+      )
       const seats = ctx.request.input('seats', t.seats ?? null)
       t.merge({
         businessId: ctx.business.id,
         name,
-        zone: zone ? String(zone).trim().slice(0, 40) : null,
+        diningAreaId: area?.id ?? null,
+        zone: area?.name ?? null,
         seats: seats ? Math.max(1, Number(seats)) : null,
         sortOrder: Number(ctx.request.input('sortOrder', t.sortOrder ?? 0)) || 0,
         isActive: ctx.request.input('isActive', t.isActive ?? true) !== false,
@@ -855,10 +878,7 @@ export default class SalonController {
       const prefijo = String(ctx.request.input('prefix', '') ?? '')
         .trim()
         .slice(0, 20)
-      const zone =
-        String(ctx.request.input('zone', '') ?? '')
-          .trim()
-          .slice(0, 40) || null
+      const area = await this.areaComedor(ctx, ctx.request.input('diningAreaId'))
       const existentes = await DiningTable.query()
         .where('business_id', ctx.business.id)
         .count('* as n')
@@ -869,7 +889,8 @@ export default class SalonController {
           await DiningTable.create({
             businessId: ctx.business.id,
             name: prefijo ? `${prefijo} ${i}` : String(base + i),
-            zone,
+            zone: area?.name ?? null,
+            diningAreaId: area?.id ?? null,
             sortOrder: base + i,
             isActive: true,
           })
@@ -892,6 +913,84 @@ export default class SalonController {
         .first()
       if (abierta) throw new OrderError('La mesa tiene una cuenta abierta')
       await t.delete()
+      return { ok: true }
+    })
+  }
+
+  /** Área del comedor del negocio (o null). */
+  private async areaComedor(ctx: HttpContext, id: unknown) {
+    const n = Number(id) || null
+    if (!n) return null
+    const area = await db
+      .from('dining_areas')
+      .where('business_id', ctx.business.id)
+      .andWhere('id', n)
+      .first()
+    if (!area) throw new OrderError('Área del comedor no válida')
+    return area as { id: number; name: string }
+  }
+
+  async saveDiningArea(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, async () => {
+      const id = Number(ctx.params.id) || null
+      const name = String(ctx.request.input('name', '') ?? '')
+        .trim()
+        .slice(0, 40)
+      if (!name) throw new OrderError('Escribe el nombre del área: Primer piso, Terraza…')
+      const repetida = await db
+        .from('dining_areas')
+        .where('business_id', ctx.business.id)
+        .andWhere('name', name)
+        .if(id, (q) => q.whereNot('id', id!))
+        .first()
+      if (repetida) throw new OrderError('Ya existe un área con ese nombre')
+      if (id) {
+        await db
+          .from('dining_areas')
+          .where('business_id', ctx.business.id)
+          .andWhere('id', id)
+          .update({ name, updated_at: new Date() })
+        await db
+          .from('dining_tables')
+          .where('business_id', ctx.business.id)
+          .andWhere('dining_area_id', id)
+          .update({ zone: name })
+        return { ok: true }
+      }
+      const orden = await db
+        .from('dining_areas')
+        .where('business_id', ctx.business.id)
+        .max('sort_order as n')
+        .first()
+      await db.table('dining_areas').insert({
+        business_id: ctx.business.id,
+        name,
+        sort_order: Number(orden?.n ?? 0) + 1,
+        created_at: new Date(),
+        updated_at: new Date(),
+      })
+      return { ok: true }
+    })
+  }
+
+  async deleteDiningArea(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, async () => {
+      const id = Number(ctx.params.id)
+      const mesas = await db
+        .from('dining_tables')
+        .where('business_id', ctx.business.id)
+        .andWhere('dining_area_id', id)
+        .count('* as n')
+        .first()
+      if (Number(mesas?.n ?? 0) > 0)
+        throw new OrderError('El área tiene mesas: muévelas o bórralas primero')
+      await db
+        .from('dining_areas')
+        .where('business_id', ctx.business.id)
+        .andWhere('id', id)
+        .delete()
       return { ok: true }
     })
   }

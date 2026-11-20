@@ -14,6 +14,10 @@ export default class DiningTable extends BaseModel {
   @column()
   declare zone: string | null
 
+  /** Área del comedor (Primer piso, Terraza…). `zone` guarda su nombre. */
+  @column()
+  declare diningAreaId: number | null
+
   @column()
   declare seats: number | null
 

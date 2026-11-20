@@ -46,7 +46,7 @@ export default class PrintJob extends BaseModel {
   declare payload: Record<string, any>
 
   @column()
-  declare status: 'pendiente' | 'impreso' | 'error'
+  declare status: 'pendiente' | 'impreso' | 'error' | 'descartado'
 
   @column()
   declare attempts: number
