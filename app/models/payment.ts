@@ -1,11 +1,12 @@
 import { DateTime } from 'luxon'
-import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
+import { BaseModel, column, belongsTo, beforeCreate } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 import Business from '#models/business'
 import BusinessImage from '#models/business_image'
 import Order from '#models/order'
 import User from '#models/user'
 import StorageService from '#services/storage_service'
+import db from '@adonisjs/lucid/services/db'
 
 export type MetodoPago = 'efectivo' | 'yape' | 'plin' | 'transferencia' | 'tarjeta' | 'otro'
 
@@ -54,6 +55,10 @@ export default class Payment extends BaseModel {
   @column.dateTime()
   declare paidAt: DateTime
 
+  /** Sesión de caja abierta cuando entró el cobro (para los cortes X/Z). */
+  @column()
+  declare cashSessionId: number | null
+
   @column()
   declare userId: number | null
 
@@ -71,4 +76,23 @@ export default class Payment extends BaseModel {
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
+
+  /**
+   * Todo cobro (salón, mostrador, pedido online) cae en la caja abierta: la
+   * de quien cobra si tiene una, o la única abierta del negocio. Sin caja
+   * abierta queda sin sesión, como antes de existir los cortes.
+   */
+  @beforeCreate()
+  static async asignarCaja(payment: Payment) {
+    if (payment.cashSessionId) return
+    const cliente = payment.$trx ?? db
+    const abiertas = await cliente
+      .from('cash_sessions')
+      .where('business_id', payment.businessId)
+      .andWhere('status', 'abierta')
+      .select('id', 'user_id')
+    const propia = abiertas.find((s) => payment.userId && s.user_id === payment.userId)
+    if (propia) payment.cashSessionId = propia.id
+    else if (abiertas.length === 1) payment.cashSessionId = abiertas[0].id
+  }
 }

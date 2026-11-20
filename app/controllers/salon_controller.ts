@@ -7,6 +7,7 @@ import ProductionArea from '#models/production_area'
 import { OrderError } from '#services/order_service'
 import SalonService, { type Actor } from '#services/salon_service'
 import StaffService from '#services/staff_service'
+import CashService from '#services/cash_service'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
 
@@ -107,6 +108,65 @@ export default class SalonController {
     return this.manejar(ctx, () =>
       SalonService.moverMesa(ctx.business, this.actor(ctx), Number(ctx.params.id), Number(ctx.request.input('tableId')))
     )
+  }
+
+  // ------------------------------------------------------------------- caja
+
+  async cashState(ctx: HttpContext) {
+    return this.manejar(ctx, () => CashService.estado(ctx.business, this.actor(ctx)))
+  }
+
+  async cashOpen(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      CashService.abrir(ctx.business, this.actor(ctx), {
+        registerId: ctx.request.input('registerId'),
+        openingFloat: ctx.request.input('openingFloat'),
+      })
+    )
+  }
+
+  async cashRegister(ctx: HttpContext) {
+    return this.manejar(ctx, () => CashService.crearCaja(ctx.business, this.actor(ctx), ctx.request.input('name')))
+  }
+
+  async cashMovement(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      CashService.movimiento(ctx.business, this.actor(ctx), Number(ctx.params.id), {
+        type: ctx.request.input('type'),
+        amount: ctx.request.input('amount'),
+        reason: ctx.request.input('reason'),
+      })
+    )
+  }
+
+  async cashX(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      CashService.corteX(ctx.business, this.actor(ctx), Number(ctx.params.id), ctx.request.input('print') !== false)
+    )
+  }
+
+  async cashZ(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      CashService.corteZ(ctx.business, this.actor(ctx), Number(ctx.params.id), {
+        declared: ctx.request.input('declared') ?? {},
+        note: ctx.request.input('note'),
+      })
+    )
+  }
+
+  async cashClose(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      CashService.cierreGlobal(ctx.business, this.actor(ctx), { force: ctx.request.input('force') === true })
+    )
+  }
+
+  async cashHistory(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, () => CashService.historial(ctx.business))
+  }
+
+  async cashReprint(ctx: HttpContext) {
+    return this.manejar(ctx, () => CashService.reimprimirGlobal(ctx.business, this.actor(ctx), Number(ctx.params.id)))
   }
 
   // ----------------------------------------------------- central de impresión

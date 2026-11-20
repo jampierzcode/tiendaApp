@@ -1,7 +1,15 @@
 import { DateTime } from 'luxon'
 import { BaseModel, column } from '@adonisjs/lucid/orm'
 
-export type PrintKind = 'comanda' | 'anulacion' | 'precuenta' | 'nota_venta' | 'prueba'
+export type PrintKind =
+  | 'comanda'
+  | 'anulacion'
+  | 'precuenta'
+  | 'nota_venta'
+  | 'prueba'
+  | 'corte_x'
+  | 'corte_z'
+  | 'corte_global'
 
 /**
  * Trabajo de impresión. El backend arma el contenido (payload) y la central

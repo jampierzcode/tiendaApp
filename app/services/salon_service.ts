@@ -562,6 +562,19 @@ export default class SalonService {
       await this.recalcular(order, trx)
       if (Number(order.total) <= 0) throw new OrderError('La cuenta no tiene nada que cobrar')
 
+      // El cobro cae en la caja de quien cobra (o la única abierta): sin caja abierta no se cobra.
+      const cajas = await trx
+        .from('cash_sessions')
+        .where('business_id', business.id)
+        .andWhere('status', 'abierta')
+        .select('id', 'user_id')
+      const caja = cajas.find((c) => c.user_id === actor.userId) ?? (cajas.length === 1 ? cajas[0] : null)
+      if (!caja) {
+        throw new OrderError(
+          cajas.length ? 'Hay varias cajas abiertas: abre la tuya para cobrar' : 'Abre la caja antes de cobrar'
+        )
+      }
+
       const pct = Math.min(Math.max(Number(datos.discountPercentage ?? 0), 0), 100)
       const rebaja = r2((Number(order.total) * pct) / 100)
       const total = r2(Number(order.total) - rebaja)
@@ -589,6 +602,7 @@ export default class SalonService {
             receiptImageId: pago.receiptImageId ?? null,
             paidAt: DateTime.now(),
             userId: actor.userId,
+            cashSessionId: caja.id,
           },
           { client: trx }
         )
