@@ -1,4 +1,5 @@
 import Business from '#models/business'
+import BusinessStaff from '#models/business_staff'
 import { FUNCIONES, funcionDeRuta } from '#services/plan_features'
 import type { HttpContext } from '@adonisjs/core/http'
 import type { NextFn } from '@adonisjs/core/types/http'
@@ -11,6 +12,8 @@ declare module '@adonisjs/core/http' {
      * contra el usuario autenticado.
      */
     business: Business
+    /** Si quien opera es del personal (mesera/cajero), su ficha. Null = dueño o superadmin. */
+    staff: BusinessStaff | null
   }
 }
 
@@ -52,11 +55,21 @@ export default class TenantMiddleware {
     await user.load('role')
     const isSuperAdmin = user.role?.name === 'superadmin'
 
+    // El personal (meseras, caja) entra solo al PDV de salón de su negocio.
+    let staff: BusinessStaff | null = null
     if (!isSuperAdmin && business.userId !== user.id) {
-      return ctx.response.forbidden({
-        status: 'error',
-        message: 'No tienes acceso a este negocio',
-      })
+      staff = await BusinessStaff.query()
+        .where('business_id', business.id)
+        .andWhere('user_id', user.id)
+        .andWhere('is_active', true)
+        .first()
+      const recursoPedido = ctx.request.url().split(`/api/b/${businessUuid}/`)[1] ?? ''
+      if (!staff || !/^salon(\/|$)/.test(recursoPedido)) {
+        return ctx.response.forbidden({
+          status: 'error',
+          message: 'No tienes acceso a este negocio',
+        })
+      }
     }
 
     if (!isSuperAdmin && business.status !== 'activo') {
@@ -94,6 +107,7 @@ export default class TenantMiddleware {
     }
 
     ctx.business = business
+    ctx.staff = staff
 
     return next()
   }

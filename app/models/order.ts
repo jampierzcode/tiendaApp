@@ -7,6 +7,7 @@ import OrderItem from '#models/order_item'
 import Payment from '#models/payment'
 
 export type OrderStatus =
+  | 'abierta'
   | 'pendiente'
   | 'confirmado'
   | 'pagado'
@@ -17,7 +18,7 @@ export type OrderStatus =
   | 'cancelado'
   | 'devuelto'
 
-export type OrderChannel = 'whatsapp' | 'mostrador' | 'online'
+export type OrderChannel = 'whatsapp' | 'mostrador' | 'online' | 'salon'
 
 export default class Order extends BaseModel {
   @column({ isPrimary: true })
@@ -75,6 +76,19 @@ export default class Order extends BaseModel {
   /** Mesa del restaurante ("5", "Terraza 2"), cuando el pedido es en mesa. */
   @column()
   declare tableLabel: string | null
+
+  /** PDV de salón: mesa, comensales, quién abrió y cuándo se cobró. */
+  @column()
+  declare diningTableId: number | null
+
+  @column()
+  declare guests: number | null
+
+  @column()
+  declare openedByUserId: number | null
+
+  @column.dateTime()
+  declare closedAt: DateTime | null
 
   @column.dateTime()
   declare readyAt: DateTime | null

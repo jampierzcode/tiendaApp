@@ -59,6 +59,26 @@ export default class OrderItem extends BaseModel {
   @column()
   declare note: string | null
 
+  /** PDV de salón: ronda en que se comandó y área a la que salió. */
+  @column()
+  declare orderRoundId: number | null
+
+  @column()
+  declare productionAreaId: number | null
+
+  @column()
+  declare productionAreaName: string | null
+
+  /** Anulado: sigue en la cuenta para el historial, pero no se cobra. */
+  @column.dateTime()
+  declare voidedAt: DateTime | null
+
+  @column()
+  declare voidReason: string | null
+
+  @column()
+  declare voidedByUserId: number | null
+
   @hasMany(() => OrderItemModifier)
   declare modifiers: HasMany<typeof OrderItemModifier>
 

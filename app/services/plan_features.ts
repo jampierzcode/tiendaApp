@@ -58,6 +58,11 @@ export const FUNCIONES = {
     detalle: 'Vende en el local desde el mismo panel.',
     rubro: null as Rubro,
   },
+  salon: {
+    label: 'PDV de salón',
+    detalle: 'Mesas, comandas por área, meseras con PIN, impresión y cobro en mesa.',
+    rubro: 'restaurant' as Rubro,
+  },
   reportes: {
     label: 'Reportes de ventas',
     detalle: 'Ventas, productos top y tendencias.',
@@ -107,6 +112,7 @@ export const REGLAS_RUTA: { patron: RegExp; funcion: Funcion }[] = [
   { patron: /^whatsapp\/(agent|seller-config)/, funcion: 'vendedor_ia' },
   { patron: /^whatsapp(\/|$)/, funcion: 'whatsapp' },
   { patron: /^pos(\/|$)/, funcion: 'pos' },
+  { patron: /^salon(\/|$)/, funcion: 'salon' },
   { patron: /^inventory(\/|$)/, funcion: 'inventario' },
   { patron: /^(purchases|suppliers|returns|price-reviews)(\/|$)/, funcion: 'compras' },
   { patron: /^products\/\d+\/(price-suggestion|price)(\/|$)/, funcion: 'compras' },

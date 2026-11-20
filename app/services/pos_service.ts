@@ -275,7 +275,7 @@ export default class PosService {
   }
 
   /** Serie fija y correlativo por negocio. Enganche para SUNAT más adelante. */
-  private static async siguienteTicket(business: Business, trx: any) {
+  static async siguienteTicket(business: Business, trx: any) {
     const ultimo = await trx
       .from('orders')
       .where('business_id', business.id)

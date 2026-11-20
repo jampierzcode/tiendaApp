@@ -39,6 +39,10 @@ export default class Product extends BaseModel {
   @column()
   declare sortOrder: number
 
+  /** Área de producción (cocina, barra…). Null = la de su categoría. */
+  @column()
+  declare productionAreaId: number | null
+
   @column()
   declare price: number
 

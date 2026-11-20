@@ -1,0 +1,31 @@
+import { DateTime } from 'luxon'
+import { BaseModel, column } from '@adonisjs/lucid/orm'
+
+export default class DiningTable extends BaseModel {
+  @column({ isPrimary: true })
+  declare id: number
+
+  @column()
+  declare businessId: number
+
+  @column()
+  declare name: string
+
+  @column()
+  declare zone: string | null
+
+  @column()
+  declare seats: number | null
+
+  @column()
+  declare sortOrder: number
+
+  @column()
+  declare isActive: boolean
+
+  @column.dateTime({ autoCreate: true })
+  declare createdAt: DateTime
+
+  @column.dateTime({ autoCreate: true, autoUpdate: true })
+  declare updatedAt: DateTime
+}

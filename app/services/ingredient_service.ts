@@ -93,7 +93,8 @@ export default class IngredientService {
    * que el panel pueda avisar que ese consumo no se está registrando.
    */
   static async consumirPedido(order: Order, trx: TransactionClientContract, userId: number | null) {
-    await order.load('items', (q) => q.preload('modifiers'))
+    // Los ítems anulados en el salón no se prepararon: no gastan insumos.
+    await order.load('items', (q) => q.whereNull('voided_at').preload('modifiers'))
 
     const productIds = [...new Set(order.items.map((i) => i.productId).filter((v): v is number => !!v))]
 

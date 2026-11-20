@@ -26,6 +26,10 @@ export default class Category extends BaseModel {
   @column()
   declare sortOrder: number
 
+  /** Área de producción por defecto para los platos de esta categoría. */
+  @column()
+  declare productionAreaId: number | null
+
   @column()
   declare isActive: boolean
 

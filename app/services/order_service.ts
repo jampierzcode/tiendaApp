@@ -294,105 +294,7 @@ export default class OrderService {
       throw new OrderError('Falta indicar la mesa')
     }
 
-    const productIds = [...new Set(datos.items.map((i) => Number(i.productId)))]
-
-    const products = await Product.query()
-      .where('business_id', business.id)
-      .andWhere('status', 'activo')
-      .whereIn('id', productIds)
-      .preload('defaultVariation')
-
-    if (products.length !== productIds.length) {
-      throw new OrderError('Alguno de los platos ya no está disponible')
-    }
-    const productoPorId = new Map(products.map((p) => [p.id, p]))
-
-    const { promos, cupon } = await this.cargarPromos(business, datos.couponCode)
-    const categoriasDe = await PromotionService.categoriasPorProducto(products.map((p) => p.id))
-
-    const reglas = await ProductModifierGroup.query()
-      .where('business_id', business.id)
-      .whereIn('product_id', productIds)
-      .preload('group')
-    const reglasPorProducto = new Map<number, ProductModifierGroup[]>()
-    for (const regla of reglas) {
-      if (!regla.group?.isActive) continue
-      const lista = reglasPorProducto.get(regla.productId) ?? []
-      lista.push(regla)
-      reglasPorProducto.set(regla.productId, lista)
-    }
-
-    const opcionIds = datos.items.flatMap((i) => (i.options ?? []).map((o) => Number(o.optionId)))
-    const opciones = opcionIds.length
-      ? await ModifierOption.query()
-          .where('business_id', business.id)
-          .andWhere('is_active', true)
-          .whereIn('id', opcionIds)
-      : []
-    const opcionPorId = new Map(opciones.map((o) => [o.id, o]))
-
-    // Se valida y se calcula todo antes de escribir.
-    const lineas = datos.items.map((item) => {
-      const cantidad = Math.floor(Number(item.quantity))
-      if (!Number.isFinite(cantidad) || cantidad < 1 || cantidad > 99) {
-        throw new OrderError('Las cantidades deben ser enteros entre 1 y 99')
-      }
-
-      const producto = productoPorId.get(Number(item.productId))!
-      const reglasDelPlato = reglasPorProducto.get(producto.id) ?? []
-      const elegidas = new Map<number, number>() // optionId -> cantidad
-
-      for (const o of item.options ?? []) {
-        const q = Math.max(1, Math.floor(Number(o.quantity ?? 1)))
-        elegidas.set(Number(o.optionId), (elegidas.get(Number(o.optionId)) ?? 0) + q)
-      }
-
-      const modificadores: { option: ModifierOption; groupName: string; quantity: number }[] = []
-      let extras = 0
-
-      for (const regla of reglasDelPlato) {
-        let totalGrupo = 0
-        for (const [optionId, q] of elegidas) {
-          const opcion = opcionPorId.get(optionId)
-          if (opcion && opcion.modifierGroupId === regla.modifierGroupId) {
-            totalGrupo += q
-            modificadores.push({ option: opcion, groupName: regla.group.name, quantity: q })
-            extras += Number(opcion.priceDelta) * q
-          }
-        }
-        if (totalGrupo < regla.minSelect) {
-          throw new OrderError(`En «${producto.name}» elige: ${regla.group.name}`)
-        }
-        if (totalGrupo > regla.maxSelect) {
-          throw new OrderError(
-            `En «${producto.name}» puedes elegir hasta ${regla.maxSelect} en ${regla.group.name}`
-          )
-        }
-      }
-
-      const asignadas = modificadores.reduce((t, m) => t + m.quantity, 0)
-      const pedidas = [...elegidas.values()].reduce((t, q) => t + q, 0)
-      if (asignadas !== pedidas) {
-        throw new OrderError(`Una opción elegida en «${producto.name}» ya no está disponible`)
-      }
-
-      // La promoción actúa sobre el plato; los extras (modificadores) se cobran completos.
-      const base = Number(producto.price)
-      const mejor = PromotionService.mejorParaLinea(promos, {
-        productId: producto.id,
-        categoryIds: categoriasDe.get(producto.id) ?? [],
-        precioUnit: base,
-        cantidad,
-      })
-      const bruto = PricingService.redondear((base + extras) * cantidad)
-      const lineTotal = PricingService.redondear(Math.max(0, bruto - mejor.ahorro))
-
-      return { item, cantidad, producto, modificadores, mejor, extras, base, bruto, lineTotal }
-    })
-
-    if (cupon && !lineas.some((l) => l.mejor.promo?.id === cupon.id)) {
-      throw new OrderError('El cupón no aplica a los productos de tu carrito')
-    }
+    const { lineas, cupon } = await this.prepararLineasMenu(business, datos.items, datos.couponCode)
 
     const order = await db.transaction(async (trx) => {
       const customer = await this.registrarCliente(business, datos as any, trx)
@@ -492,6 +394,115 @@ export default class OrderService {
   }
 
   /**
+   * Valida y calcula las líneas de un pedido de restaurante (precio, extras,
+   * promoción) sin escribir nada. Lo usan la tienda pública y el PDV de salón.
+   */
+  static async prepararLineasMenu(business: Business, items: LineaMenu[], couponCode?: string | null) {
+    if (!items?.length) throw new OrderError('No hay platos')
+    const productIds = [...new Set(items.map((i) => Number(i.productId)))]
+
+    const products = await Product.query()
+      .where('business_id', business.id)
+      .andWhere('status', 'activo')
+      .whereIn('id', productIds)
+      .preload('defaultVariation')
+
+    if (products.length !== productIds.length) {
+      throw new OrderError('Alguno de los platos ya no está disponible')
+    }
+    const productoPorId = new Map(products.map((p) => [p.id, p]))
+
+    const { promos, cupon } = await this.cargarPromos(business, couponCode)
+    const categoriasDe = await PromotionService.categoriasPorProducto(products.map((p) => p.id))
+
+    const reglas = await ProductModifierGroup.query()
+      .where('business_id', business.id)
+      .whereIn('product_id', productIds)
+      .preload('group')
+    const reglasPorProducto = new Map<number, ProductModifierGroup[]>()
+    for (const regla of reglas) {
+      if (!regla.group?.isActive) continue
+      const lista = reglasPorProducto.get(regla.productId) ?? []
+      lista.push(regla)
+      reglasPorProducto.set(regla.productId, lista)
+    }
+
+    const opcionIds = items.flatMap((i) => (i.options ?? []).map((o) => Number(o.optionId)))
+    const opciones = opcionIds.length
+      ? await ModifierOption.query()
+          .where('business_id', business.id)
+          .andWhere('is_active', true)
+          .whereIn('id', opcionIds)
+      : []
+    const opcionPorId = new Map(opciones.map((o) => [o.id, o]))
+
+    // Se valida y se calcula todo antes de escribir.
+    const lineas = items.map((item) => {
+      const cantidad = Math.floor(Number(item.quantity))
+      if (!Number.isFinite(cantidad) || cantidad < 1 || cantidad > 99) {
+        throw new OrderError('Las cantidades deben ser enteros entre 1 y 99')
+      }
+
+      const producto = productoPorId.get(Number(item.productId))!
+      const reglasDelPlato = reglasPorProducto.get(producto.id) ?? []
+      const elegidas = new Map<number, number>() // optionId -> cantidad
+
+      for (const o of item.options ?? []) {
+        const q = Math.max(1, Math.floor(Number(o.quantity ?? 1)))
+        elegidas.set(Number(o.optionId), (elegidas.get(Number(o.optionId)) ?? 0) + q)
+      }
+
+      const modificadores: { option: ModifierOption; groupName: string; quantity: number }[] = []
+      let extras = 0
+
+      for (const regla of reglasDelPlato) {
+        let totalGrupo = 0
+        for (const [optionId, q] of elegidas) {
+          const opcion = opcionPorId.get(optionId)
+          if (opcion && opcion.modifierGroupId === regla.modifierGroupId) {
+            totalGrupo += q
+            modificadores.push({ option: opcion, groupName: regla.group.name, quantity: q })
+            extras += Number(opcion.priceDelta) * q
+          }
+        }
+        if (totalGrupo < regla.minSelect) {
+          throw new OrderError(`En «${producto.name}» elige: ${regla.group.name}`)
+        }
+        if (totalGrupo > regla.maxSelect) {
+          throw new OrderError(
+            `En «${producto.name}» puedes elegir hasta ${regla.maxSelect} en ${regla.group.name}`
+          )
+        }
+      }
+
+      const asignadas = modificadores.reduce((t, m) => t + m.quantity, 0)
+      const pedidas = [...elegidas.values()].reduce((t, q) => t + q, 0)
+      if (asignadas !== pedidas) {
+        throw new OrderError(`Una opción elegida en «${producto.name}» ya no está disponible`)
+      }
+
+      // La promoción actúa sobre el plato; los extras (modificadores) se cobran completos.
+      const base = Number(producto.price)
+      const mejor = PromotionService.mejorParaLinea(promos, {
+        productId: producto.id,
+        categoryIds: categoriasDe.get(producto.id) ?? [],
+        precioUnit: base,
+        cantidad,
+      })
+      const bruto = PricingService.redondear((base + extras) * cantidad)
+      const lineTotal = PricingService.redondear(Math.max(0, bruto - mejor.ahorro))
+
+      return { item, cantidad, producto, modificadores, mejor, extras, base, bruto, lineTotal }
+    })
+
+    if (cupon && !lineas.some((l) => l.mejor.promo?.id === cupon.id)) {
+      throw new OrderError('El cupón no aplica a los productos de tu carrito')
+    }
+
+    return { lineas, cupon }
+  }
+
+  /**
    * El stock NO se descuenta al crear el pedido: un pedido de WhatsApp aún
    * no está confirmado y reservar inventario por cada carrito abandonado
    * dejaría la tienda en cero. Se descuenta cuando el negocio lo confirma.
@@ -563,7 +574,7 @@ export default class OrderService {
   }
 
   /** Código legible y corto: P-000123, correlativo por tienda. */
-  private static async siguienteCodigo(business: Business, trx: any): Promise<string> {
+  static async siguienteCodigo(business: Business, trx: any): Promise<string> {
     const ultimo = await trx
       .from('orders')
       .where('business_id', business.id)

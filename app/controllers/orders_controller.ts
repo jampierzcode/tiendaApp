@@ -14,6 +14,8 @@ import { DateTime } from 'luxon'
 export default class OrdersController {
   /** Estados a los que se puede pasar desde cada estado. */
   private static transiciones: Record<OrderStatus, OrderStatus[]> = {
+    // La cuenta abierta de una mesa se maneja desde el PDV de salón.
+    abierta: [],
     pendiente: ['confirmado', 'cancelado'],
     confirmado: ['pagado', 'preparando', 'enviado', 'cancelado'],
     pagado: ['preparando', 'enviado', 'cancelado'],
@@ -34,6 +36,7 @@ export default class OrdersController {
     if (!business.esRestaurante) return OrdersController.transiciones[order.status] ?? []
     const conReparto = order.deliveryMethod === 'envio'
     const mapa: Record<OrderStatus, OrderStatus[]> = {
+      abierta: [],
       pendiente: ['confirmado', 'cancelado'],
       confirmado: ['preparando', 'cancelado'],
       pagado: ['preparando', 'cancelado'],

@@ -63,6 +63,7 @@ import PlansController from '#controllers/plans_controller'
 import BusinessSubscriptionsController from '#controllers/business_subscriptions_controller'
 import MyPlanController from '#controllers/my_plan_controller'
 import WhatsappBotController, { WhatsappPanelController } from '#controllers/whatsapp_controller'
+import SalonController, { StaffAuthController } from '#controllers/salon_controller'
 
 router.get('/', async () => ({ hello: 'world' }))
 
@@ -130,6 +131,12 @@ router
     router.post('/owner-message', [WhatsappBotController, 'ownerMessage'])
   })
   .prefix('/api/bot')
+
+/*
+| 1c-bis. Entrada del personal (meseras) con PIN al comandero — sin token.
+*/
+router.get('/api/staff/:businessUuid', [StaffAuthController, 'list'])
+router.post('/api/staff/:businessUuid/login', [StaffAuthController, 'login'])
 
 /*
 | 1d. Cuentas de cliente (global, no depende de una tienda)
@@ -375,6 +382,39 @@ router
     router.get('/pos/search', [PosController, 'search'])
     router.post('/pos/sell', [PosController, 'sell'])
     router.get('/pos/ticket/:id', [PosController, 'ticket'])
+
+    // PDV de salón: operación (dueño y personal)
+    router.get('/salon/me', [SalonController, 'me'])
+    router.get('/salon/tables', [SalonController, 'tables'])
+    router.get('/salon/menu', [SalonController, 'menu'])
+    router.post('/salon/command', [SalonController, 'command'])
+    router.get('/salon/accounts/:id', [SalonController, 'account'])
+    router.post('/salon/accounts/:id/pre-bill', [SalonController, 'preBill'])
+    router.post('/salon/accounts/:id/pay', [SalonController, 'pay'])
+    router.post('/salon/accounts/:id/cancel', [SalonController, 'cancel'])
+    router.post('/salon/accounts/:id/move', [SalonController, 'move'])
+    router.post('/salon/items/:itemId/void', [SalonController, 'voidItem'])
+    // PDV de salón: central de impresión y configuración (solo dueño)
+    router.get('/salon/print-queue', [SalonController, 'printQueue'])
+    router.get('/salon/print-history', [SalonController, 'printHistory'])
+    router.post('/salon/print-jobs/:jobId/result', [SalonController, 'printResult'])
+    router.post('/salon/print-jobs/:jobId/reprint', [SalonController, 'reprint'])
+    router.post('/salon/print-test', [SalonController, 'testPrint'])
+    router.get('/salon/config', [SalonController, 'config'])
+    router.post('/salon/printers', [SalonController, 'savePrinter'])
+    router.put('/salon/printers/:id', [SalonController, 'savePrinter'])
+    router.delete('/salon/printers/:id', [SalonController, 'deletePrinter'])
+    router.post('/salon/areas', [SalonController, 'saveArea'])
+    router.put('/salon/areas/:id', [SalonController, 'saveArea'])
+    router.delete('/salon/areas/:id', [SalonController, 'deleteArea'])
+    router.put('/salon/area-assignments', [SalonController, 'assignAreas'])
+    router.post('/salon/tables', [SalonController, 'saveTable'])
+    router.post('/salon/tables/bulk', [SalonController, 'bulkTables'])
+    router.put('/salon/tables/:id', [SalonController, 'saveTable'])
+    router.delete('/salon/tables/:id', [SalonController, 'deleteTable'])
+    router.post('/salon/staff', [SalonController, 'saveStaff'])
+    router.put('/salon/staff/:id', [SalonController, 'saveStaff'])
+    router.delete('/salon/staff/:id', [SalonController, 'deleteStaff'])
 
     // Proveedores y compras
     router.get('/suppliers', [SuppliersController, 'index'])
