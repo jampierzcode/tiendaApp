@@ -6,6 +6,7 @@ export type PrintKind =
   | 'anulacion'
   | 'precuenta'
   | 'nota_venta'
+  | 'cancelacion'
   | 'prueba'
   | 'corte_x'
   | 'corte_z'

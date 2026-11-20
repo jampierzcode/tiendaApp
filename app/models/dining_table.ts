@@ -23,6 +23,10 @@ export default class DiningTable extends BaseModel {
   @column()
   declare isActive: boolean
 
+  /** Ya se cobró pero la mesa no se ha liberado (limpieza). */
+  @column()
+  declare needsRelease: boolean
+
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 

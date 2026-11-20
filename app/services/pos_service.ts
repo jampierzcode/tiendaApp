@@ -140,6 +140,7 @@ export default class PosService {
           customerName: venta.customerName?.trim() || 'Cliente de mostrador',
           customerPhone: venta.customerPhone?.trim() || null,
           deliveryMethod: 'recojo',
+          service: 'para_llevar',
           note: venta.note?.trim() || null,
           currency: business.currency,
           subtotal: 0,

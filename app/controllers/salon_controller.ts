@@ -1,33 +1,65 @@
+import CashRegister from '#models/cash_register'
 import Category from '#models/category'
 import DiningTable from '#models/dining_table'
+import Order from '#models/order'
 import Printer from '#models/printer'
 import PrintJob from '#models/print_job'
 import Product from '#models/product'
 import ProductionArea from '#models/production_area'
-import { OrderError } from '#services/order_service'
-import SalonService, { type Actor } from '#services/salon_service'
-import StaffService from '#services/staff_service'
 import CashService from '#services/cash_service'
+import FolioService from '#services/folio_service'
+import { OrderError } from '#services/order_service'
+import PermissionService, { AutorizacionRequerida, type Actor } from '#services/permission_service'
+import PosSettingsService, { PERMISOS, ROLES_POS, type RolPos } from '#services/pos_settings_service'
+import SalonService from '#services/salon_service'
+import StaffService from '#services/staff_service'
 import type { HttpContext } from '@adonisjs/core/http'
+import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
 
 /**
- * PDV de salón. Las rutas de operación (mesas, comandar, cobrar) las usan el
- * dueño y el personal; las de configuración y la central de impresión, solo
- * el dueño.
+ * PDV de salón. Operación (mesas, cuentas, cobro, caja) para el dueño y el
+ * personal según sus permisos; central de impresión e infraestructura solo
+ * para el dueño.
  */
 export default class SalonController {
-  private actor(ctx: HttpContext): Actor {
+  private async actor(ctx: HttpContext): Promise<Actor> {
     if (ctx.staff) {
-      return { userId: ctx.staff.userId, name: ctx.staff.name, role: ctx.staff.role }
+      const equipo = await StaffService.equipoDeToken(String(ctx.auth.user!.currentAccessToken.identifier))
+      return {
+        userId: ctx.staff.userId,
+        name: ctx.staff.name,
+        role: ctx.staff.role as RolPos,
+        permisos: await PermissionService.permisosDeRol(ctx.business, ctx.staff.role as RolPos),
+        deviceId: equipo?.id ?? null,
+        cashRegisterId: equipo?.cash_register_id ?? null,
+      }
     }
-    return { userId: ctx.auth.user!.id, name: ctx.auth.user!.name || 'Dueño', role: 'dueno' }
+    return {
+      userId: ctx.auth.user!.id,
+      name: ctx.auth.user!.name || 'Dueño',
+      role: 'dueno',
+      permisos: await PermissionService.permisosDeRol(ctx.business, 'dueno'),
+    }
   }
 
-  private async manejar(ctx: HttpContext, fn: () => Promise<unknown>) {
+  /** PIN de un superior para autorizar (cabecera o cuerpo). */
+  private pin(ctx: HttpContext) {
+    return ctx.request.header('x-autorizacion-pin') || ctx.request.input('pin') || null
+  }
+
+  private async manejar(ctx: HttpContext, fn: (actor: Actor) => Promise<unknown>) {
     try {
-      return { status: 'success', data: await fn() }
+      return { status: 'success', data: await fn(await this.actor(ctx)) }
     } catch (error) {
+      if (error instanceof AutorizacionRequerida) {
+        return ctx.response.forbidden({
+          status: 'error',
+          code: 'autorizacion_requerida',
+          permiso: error.permiso,
+          message: error.message,
+        })
+      }
       if (error instanceof OrderError) {
         return ctx.response.unprocessableEntity({ status: 'error', message: error.message })
       }
@@ -46,20 +78,33 @@ export default class SalonController {
   // ------------------------------------------------------------- operación
 
   async me(ctx: HttpContext) {
-    const a = this.actor(ctx)
-    return {
-      status: 'success',
-      data: {
+    return this.manejar(ctx, async (a) => {
+      const ajustes = await PosSettingsService.leer(ctx.business)
+      const caja = a.cashRegisterId ? await CashRegister.find(a.cashRegisterId) : null
+      return {
         name: a.name,
         role: a.role,
-        puedeCobrar: SalonService.puedeCobrar(a),
+        permisos: a.permisos,
+        caja: caja ? { id: caja.id, name: caja.name } : null,
+        servicios: ajustes.servicios,
+        inactividadSegundos: ajustes.inactividadSegundos,
+        liberarMesaManual: ajustes.liberarMesaManual,
         negocio: { name: ctx.business.name, uuid: ctx.business.uuid, simbolo: ctx.business.currencySymbol || 'S/' },
-      },
-    }
+      }
+    })
   }
 
   async tables(ctx: HttpContext) {
-    return this.manejar(ctx, () => SalonService.mesas(ctx.business))
+    return this.manejar(ctx, (a) => SalonService.mesas(ctx.business, a))
+  }
+
+  async accounts(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.cuentas(ctx.business, a, {
+        q: ctx.request.input('q'),
+        cerradas: ['1', 'true'].includes(String(ctx.request.input('cerradas', ''))),
+      })
+    )
   }
 
   async menu(ctx: HttpContext) {
@@ -67,111 +112,174 @@ export default class SalonController {
   }
 
   async account(ctx: HttpContext) {
-    return this.manejar(ctx, () => SalonService.cuenta(ctx.business, Number(ctx.params.id)))
+    return this.manejar(ctx, (a) => SalonService.cuenta(ctx.business, a, Number(ctx.params.id)))
   }
 
   async command(ctx: HttpContext) {
-    const body = ctx.request.only(['tableId', 'clientRequestId', 'guests', 'items'])
-    return this.manejar(ctx, () => SalonService.comandar(ctx.business, this.actor(ctx), body as any))
+    const body = ctx.request.only([
+      'tableId',
+      'orderId',
+      'service',
+      'alias',
+      'customerName',
+      'customerPhone',
+      'deliveryAddress',
+      'clientRequestId',
+      'guests',
+      'items',
+    ])
+    return this.manejar(ctx, (a) => SalonService.comandar(ctx.business, a, body as any))
+  }
+
+  async printAccount(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.imprimirCuenta(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) })
+    )
+  }
+
+  async reopen(ctx: HttpContext) {
+    return this.manejar(ctx, (a) => SalonService.reabrir(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) }))
   }
 
   async voidItem(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      SalonService.anularItem(ctx.business, this.actor(ctx), Number(ctx.params.itemId), {
+    return this.manejar(ctx, (a) =>
+      SalonService.anularItem(ctx.business, a, Number(ctx.params.itemId), {
         reason: ctx.request.input('reason'),
         quantity: ctx.request.input('quantity'),
+        pin: this.pin(ctx),
       })
     )
   }
 
-  async preBill(ctx: HttpContext) {
-    return this.manejar(ctx, () => SalonService.precuenta(ctx.business, this.actor(ctx), Number(ctx.params.id)))
+  async courtesy(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.cortesia(ctx.business, a, Number(ctx.params.itemId), {
+        reason: ctx.request.input('reason'),
+        quantity: ctx.request.input('quantity'),
+        pin: this.pin(ctx),
+      })
+    )
   }
 
   async pay(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      SalonService.cobrar(ctx.business, this.actor(ctx), Number(ctx.params.id), {
+    return this.manejar(ctx, (a) =>
+      SalonService.cobrar(ctx.business, a, Number(ctx.params.id), {
         payments: ctx.request.input('payments') ?? [],
         discountPercentage: ctx.request.input('discountPercentage'),
+        discountReason: ctx.request.input('discountReason'),
         customerName: ctx.request.input('customerName'),
+        pin: this.pin(ctx),
       })
+    )
+  }
+
+  async reprintNote(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.reimprimirNota(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) })
+    )
+  }
+
+  async reprintRound(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.reimprimirComanda(ctx.business, a, Number(ctx.params.roundId), { pin: this.pin(ctx) })
     )
   }
 
   async cancel(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      SalonService.cancelarCuenta(ctx.business, this.actor(ctx), Number(ctx.params.id), ctx.request.input('reason'))
+    return this.manejar(ctx, (a) =>
+      SalonService.cancelarCuenta(ctx.business, a, Number(ctx.params.id), ctx.request.input('reason'), {
+        pin: this.pin(ctx),
+      })
     )
   }
 
   async move(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      SalonService.moverMesa(ctx.business, this.actor(ctx), Number(ctx.params.id), Number(ctx.request.input('tableId')))
+    return this.manejar(ctx, (a) =>
+      SalonService.moverMesa(ctx.business, a, Number(ctx.params.id), Number(ctx.request.input('tableId')), {
+        pin: this.pin(ctx),
+      })
+    )
+  }
+
+  async releaseTable(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.liberarMesa(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) })
     )
   }
 
   // ------------------------------------------------------------------- caja
 
   async cashState(ctx: HttpContext) {
-    return this.manejar(ctx, () => CashService.estado(ctx.business, this.actor(ctx)))
+    return this.manejar(ctx, (a) => CashService.estado(ctx.business, a))
   }
 
   async cashOpen(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      CashService.abrir(ctx.business, this.actor(ctx), {
+    return this.manejar(ctx, (a) =>
+      CashService.abrir(ctx.business, a, {
         registerId: ctx.request.input('registerId'),
         openingFloat: ctx.request.input('openingFloat'),
+        pin: this.pin(ctx),
       })
     )
   }
 
-  async cashRegister(ctx: HttpContext) {
-    return this.manejar(ctx, () => CashService.crearCaja(ctx.business, this.actor(ctx), ctx.request.input('name')))
-  }
-
   async cashMovement(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      CashService.movimiento(ctx.business, this.actor(ctx), Number(ctx.params.id), {
+    return this.manejar(ctx, (a) =>
+      CashService.movimiento(ctx.business, a, Number(ctx.params.id), {
         type: ctx.request.input('type'),
         amount: ctx.request.input('amount'),
         reason: ctx.request.input('reason'),
+        pin: this.pin(ctx),
       })
     )
   }
 
   async cashX(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      CashService.corteX(ctx.business, this.actor(ctx), Number(ctx.params.id), ctx.request.input('print') !== false)
+    return this.manejar(ctx, (a) =>
+      CashService.corteX(ctx.business, a, Number(ctx.params.id), ctx.request.input('print') !== false, this.pin(ctx))
     )
   }
 
   async cashZ(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      CashService.corteZ(ctx.business, this.actor(ctx), Number(ctx.params.id), {
+    return this.manejar(ctx, (a) =>
+      CashService.corteZ(ctx.business, a, Number(ctx.params.id), {
         declared: ctx.request.input('declared') ?? {},
         note: ctx.request.input('note'),
+        pin: this.pin(ctx),
+      })
+    )
+  }
+
+  async cashCollector(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      CashService.recibirDeMesero(ctx.business, a, Number(ctx.params.id), {
+        userId: Number(ctx.request.input('userId')),
+        declared: ctx.request.input('declared') ?? {},
+        pin: this.pin(ctx),
       })
     )
   }
 
   async cashClose(ctx: HttpContext) {
-    return this.manejar(ctx, () =>
-      CashService.cierreGlobal(ctx.business, this.actor(ctx), { force: ctx.request.input('force') === true })
+    return this.manejar(ctx, (a) =>
+      CashService.cierreGlobal(ctx.business, a, { force: ctx.request.input('force') === true, pin: this.pin(ctx) })
     )
   }
 
   async cashHistory(ctx: HttpContext) {
-    if (!this.soloDueno(ctx)) return
-    return this.manejar(ctx, () => CashService.historial(ctx.business))
+    return this.manejar(ctx, async (a) => {
+      await PermissionService.exigir(ctx.business, a, 'caja.corte_global')
+      return CashService.historial(ctx.business)
+    })
   }
 
   async cashReprint(ctx: HttpContext) {
-    return this.manejar(ctx, () => CashService.reimprimirGlobal(ctx.business, this.actor(ctx), Number(ctx.params.id)))
+    return this.manejar(ctx, (a) => CashService.reimprimirGlobal(ctx.business, a, Number(ctx.params.id)))
   }
 
   // ----------------------------------------------------- central de impresión
 
-  /** Trabajos por imprimir (los últimos 12 h, hasta 5 intentos). */
+  /** Trabajos por imprimir (las últimas 12 h, hasta 5 intentos). */
   async printQueue(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
     const jobs = await PrintJob.query()
@@ -200,13 +308,9 @@ export default class SalonController {
     return { status: 'success', data: job }
   }
 
-  /** Historial reciente, para reimprimir. */
   async printHistory(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    const jobs = await PrintJob.query()
-      .where('business_id', ctx.business.id)
-      .orderBy('id', 'desc')
-      .limit(40)
+    const jobs = await PrintJob.query().where('business_id', ctx.business.id).orderBy('id', 'desc').limit(40)
     return { status: 'success', data: jobs }
   }
 
@@ -223,37 +327,65 @@ export default class SalonController {
     return { status: 'success', data: job }
   }
 
+  /** Prueba de impresora, o una cuenta de muestra para ver el estilo del ticket. */
   async testPrint(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    const printerId = Number(ctx.request.input('printerId')) || null
+    const muestra = ctx.request.input('kind') === 'muestra'
     const job = await SalonService.encolar(null, ctx.business, {
-      kind: 'prueba',
-      printerId,
+      kind: muestra ? 'precuenta' : 'prueba',
+      printerId: Number(ctx.request.input('printerId')) || null,
       orderId: null,
-      payload: { negocio: ctx.business.name },
+      payload: muestra
+        ? {
+            negocio: ctx.business.name,
+            simbolo: ctx.business.currencySymbol || 'S/',
+            servicio: 'comedor',
+            mesa: 'Mesa 5',
+            mesero: 'Ana',
+            comensales: 2,
+            folio: 'A-000123',
+            documento: 'A-000123',
+            lineas: [
+              { cantidad: 2, nombre: 'Lomo saltado', total: 56 },
+              { cantidad: 1, nombre: 'Chicha morada jarra', total: 12 },
+            ],
+            subtotal: 68,
+            descuento: 0,
+            total: 68,
+            pagos: [],
+          }
+        : { negocio: ctx.business.name },
     })
     return { status: 'success', data: job }
   }
 
-  // ---------------------------------------------------------- configuración
+  // ---------------------------------------------------------- infraestructura
 
   async config(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
     const b = ctx.business.id
-    const [printers, areas, tables, staff, categories, products] = await Promise.all([
-      Printer.query().where('business_id', b).orderBy('id', 'asc'),
-      ProductionArea.query().where('business_id', b).orderBy('sort_order', 'asc').orderBy('id', 'asc'),
-      DiningTable.query().where('business_id', b).orderBy('sort_order', 'asc').orderBy('id', 'asc'),
-      StaffService.listar(ctx.business),
-      Category.query().where('business_id', b).orderBy('sort_order', 'asc').select('id', 'name', 'production_area_id'),
-      Product.query()
-        .where('business_id', b)
-        .andWhere('status', 'activo')
-        .preload('categoryLinks')
-        .orderBy('sort_order', 'asc')
-        .orderBy('name', 'asc')
-        .select('id', 'name', 'production_area_id'),
-    ])
+    await FolioService.seriePorDefecto(ctx.business)
+    const [printers, areas, tables, staff, categories, products, registers, series, devices, ajustes] =
+      await Promise.all([
+        Printer.query().where('business_id', b).orderBy('id', 'asc'),
+        ProductionArea.query().where('business_id', b).orderBy('sort_order', 'asc').orderBy('id', 'asc'),
+        DiningTable.query().where('business_id', b).orderBy('sort_order', 'asc').orderBy('id', 'asc'),
+        StaffService.listar(ctx.business),
+        Category.query().where('business_id', b).orderBy('sort_order', 'asc').select('id', 'name', 'production_area_id'),
+        Product.query()
+          .where('business_id', b)
+          .andWhere('status', 'activo')
+          .preload('categoryLinks')
+          .orderBy('sort_order', 'asc')
+          .orderBy('name', 'asc')
+          .select('id', 'name', 'production_area_id'),
+        CashService.cajas(ctx.business).then(() =>
+          db.from('cash_registers').where('business_id', b).andWhere('is_active', true).orderBy('id', 'asc')
+        ),
+        db.from('folio_series').where('business_id', b).orderBy('id', 'asc'),
+        StaffService.equipos(ctx.business),
+        PosSettingsService.leer(ctx.business),
+      ])
     return {
       status: 'success',
       data: {
@@ -268,8 +400,141 @@ export default class SalonController {
           productionAreaId: p.productionAreaId,
           categoryIds: p.categoryLinks.map((l) => l.categoryId),
         })),
+        registers: registers.map((r) => ({ id: r.id, name: r.name, folioSeriesId: r.folio_series_id })),
+        series: series.map((s) => ({
+          id: s.id,
+          code: s.code,
+          name: s.name,
+          nextNumber: s.next_number,
+          isActive: s.is_active,
+        })),
+        devices,
+        pairingCode: await StaffService.codigoVinculacion(ctx.business),
+        ajustes,
+        catalogoPermisos: PERMISOS,
+        roles: ROLES_POS,
       },
     }
+  }
+
+  async saveSettings(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, () =>
+      PosSettingsService.guardar(
+        ctx.business,
+        ctx.request.only(['permisos', 'inactividadSegundos', 'liberarMesaManual', 'servicios', 'ticket'])
+      )
+    )
+  }
+
+  async rotatePairing(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return { status: 'success', data: { pairingCode: await StaffService.codigoVinculacion(ctx.business, true) } }
+  }
+
+  async saveDevice(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, () =>
+      StaffService.editarEquipo(ctx.business, Number(ctx.params.id), ctx.request.only(['name', 'cashRegisterId']))
+    )
+  }
+
+  async deleteDevice(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    await StaffService.revocarEquipo(ctx.business, Number(ctx.params.id))
+    return { status: 'success' }
+  }
+
+  async saveRegister(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, async () => {
+      const id = Number(ctx.params.id) || null
+      const r = id
+        ? await CashRegister.query().where('business_id', ctx.business.id).andWhere('id', id).firstOrFail()
+        : new CashRegister()
+      const name = String(ctx.request.input('name', r.name ?? '')).trim().slice(0, 60)
+      if (!name) throw new OrderError('Escribe el nombre de la caja')
+      r.merge({ businessId: ctx.business.id, name, isActive: true })
+      await r.save()
+      if (ctx.request.input('folioSeriesId') !== undefined) {
+        const s = Number(ctx.request.input('folioSeriesId')) || null
+        if (s) {
+          const existe = await db.from('folio_series').where('business_id', ctx.business.id).andWhere('id', s).first()
+          if (!existe) throw new OrderError('Serie no válida')
+        }
+        await db.from('cash_registers').where('id', r.id).update({ folio_series_id: s })
+      }
+      return r
+    })
+  }
+
+  async deleteRegister(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, async () => {
+      const abierta = await db
+        .from('cash_sessions')
+        .where('cash_register_id', Number(ctx.params.id))
+        .andWhere('status', 'abierta')
+        .first()
+      if (abierta) throw new OrderError('Esa caja está abierta: haz su corte Z primero')
+      await CashRegister.query()
+        .where('business_id', ctx.business.id)
+        .andWhere('id', Number(ctx.params.id))
+        .update({ is_active: false })
+      return { ok: true }
+    })
+  }
+
+  async saveSeries(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    return this.manejar(ctx, async () => {
+      const id = Number(ctx.params.id) || null
+      const name = ctx.request.input('name') === undefined ? undefined : String(ctx.request.input('name') ?? '').trim().slice(0, 60) || null
+      if (!id) {
+        const code = String(ctx.request.input('code', '')).trim().toUpperCase().slice(0, 16)
+        if (!/^[A-Z0-9-]{1,16}$/.test(code)) throw new OrderError('Código de serie: letras y números, sin espacios')
+        const existe = await db.from('folio_series').where('business_id', ctx.business.id).andWhere('code', code).first()
+        if (existe) throw new OrderError('Ya existe esa serie')
+        const inicio = Math.max(1, Math.floor(Number(ctx.request.input('nextNumber', 1)) || 1))
+        await db.table('folio_series').insert({
+          business_id: ctx.business.id,
+          code,
+          name: name ?? null,
+          next_number: inicio,
+          is_active: true,
+          created_at: new Date(),
+          updated_at: new Date(),
+        })
+        return { ok: true }
+      }
+      const actual = await db.from('folio_series').where('id', id).andWhere('business_id', ctx.business.id).first()
+      if (!actual) throw new OrderError('Serie no encontrada')
+      const cambios: Record<string, unknown> = { updated_at: new Date() }
+      if (name !== undefined) cambios.name = name
+      if (ctx.request.input('isActive') !== undefined) cambios.is_active = Boolean(ctx.request.input('isActive'))
+      // El siguiente número solo puede subir: bajarlo repetiría folios ya usados.
+      if (ctx.request.input('nextNumber') !== undefined) {
+        const nuevo = Math.floor(Number(ctx.request.input('nextNumber')))
+        if (!(nuevo >= actual.next_number)) {
+          throw new OrderError(`El siguiente folio no puede ser menor a ${actual.next_number}`)
+        }
+        // Se sube dentro del mismo UPDATE con GREATEST para no pisar un folio que se tomó justo ahora.
+        await db.rawQuery('UPDATE folio_series SET next_number = GREATEST(next_number, ?) WHERE id = ?', [nuevo, id])
+      }
+      await db.from('folio_series').where('id', id).update(cambios)
+      return { ok: true }
+    })
+  }
+
+  /** Áreas para los formularios de plato y categoría. */
+  async areas(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    const areas = await ProductionArea.query()
+      .where('business_id', ctx.business.id)
+      .andWhere('is_active', true)
+      .orderBy('sort_order', 'asc')
+      .orderBy('id', 'asc')
+    return { status: 'success', data: areas.map((a) => ({ id: a.id, name: a.name })) }
   }
 
   async savePrinter(ctx: HttpContext) {
@@ -325,10 +590,7 @@ export default class SalonController {
 
   async deleteArea(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    await ProductionArea.query()
-      .where('business_id', ctx.business.id)
-      .andWhere('id', Number(ctx.params.id))
-      .delete()
+    await ProductionArea.query().where('business_id', ctx.business.id).andWhere('id', Number(ctx.params.id)).delete()
     return { status: 'success' }
   }
 
@@ -337,9 +599,7 @@ export default class SalonController {
     if (!this.soloDueno(ctx)) return
     return this.manejar(ctx, async () => {
       const b = ctx.business.id
-      const validas = new Set(
-        (await ProductionArea.query().where('business_id', b).select('id')).map((a) => a.id)
-      )
+      const validas = new Set((await ProductionArea.query().where('business_id', b).select('id')).map((a) => a.id))
       const limpiar = (v: unknown) => {
         const n = Number(v)
         if (!v || !n) return null
@@ -348,11 +608,17 @@ export default class SalonController {
       }
       const cats = (ctx.request.input('categories') ?? {}) as Record<string, unknown>
       for (const [id, area] of Object.entries(cats)) {
-        await Category.query().where('business_id', b).andWhere('id', Number(id)).update({ production_area_id: limpiar(area) })
+        await Category.query()
+          .where('business_id', b)
+          .andWhere('id', Number(id))
+          .update({ production_area_id: limpiar(area) })
       }
       const prods = (ctx.request.input('products') ?? {}) as Record<string, unknown>
       for (const [id, area] of Object.entries(prods)) {
-        await Product.query().where('business_id', b).andWhere('id', Number(id)).update({ production_area_id: limpiar(area) })
+        await Product.query()
+          .where('business_id', b)
+          .andWhere('id', Number(id))
+          .update({ production_area_id: limpiar(area) })
       }
       return { ok: true }
     })
@@ -382,7 +648,7 @@ export default class SalonController {
     })
   }
 
-  /** Crea varias mesas de una: "Mesa 1" … "Mesa N". */
+  /** Crea varias mesas de una: "1" … "N" (o "Terraza 1"…). */
   async bulkTables(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
     return this.manejar(ctx, async () => {
@@ -415,11 +681,7 @@ export default class SalonController {
         .where('business_id', ctx.business.id)
         .andWhere('id', Number(ctx.params.id))
         .firstOrFail()
-      const abierta = await (await import('#models/order')).default
-        .query()
-        .where('dining_table_id', t.id)
-        .andWhere('status', 'abierta')
-        .first()
+      const abierta = await Order.query().where('dining_table_id', t.id).andWhere('status', 'abierta').first()
       if (abierta) throw new OrderError('La mesa tiene una cuenta abierta')
       await t.delete()
       return { ok: true }
@@ -440,29 +702,48 @@ export default class SalonController {
     await StaffService.eliminar(ctx.business, Number(ctx.params.id))
     return { status: 'success' }
   }
+
+  /** Quién autorizó qué (descuentos, cancelaciones, anulaciones…). */
+  async authorizationLog(ctx: HttpContext) {
+    if (!this.soloDueno(ctx)) return
+    const filas = await db.from('authorization_logs').where('business_id', ctx.business.id).orderBy('id', 'desc').limit(100)
+    return { status: 'success', data: filas }
+  }
 }
 
-/** Entrada del personal con PIN — pública, sin token. */
-export class StaffAuthController {
-  async list({ params, response }: HttpContext) {
-    const data = await StaffService.publicos(params.businessUuid)
-    if (!data) return response.notFound({ status: 'error', message: 'Negocio no encontrado' })
-    return { status: 'success', data }
-  }
-
-  async login({ params, request, response }: HttpContext) {
+/** Equipos del local y entrada del personal con PIN — públicas, sin token. */
+export class PosDeviceController {
+  private async manejar(ctx: HttpContext, fn: () => Promise<unknown>) {
     try {
-      const { token, staff } = await StaffService.entrar(
-        params.businessUuid,
-        Number(request.input('staffId')),
-        request.input('pin')
-      )
-      return { status: 'success', data: { token: token.toJSON(), name: staff.name, role: staff.role } }
+      return { status: 'success', data: await fn() }
     } catch (error) {
       if (error instanceof OrderError) {
-        return response.unprocessableEntity({ status: 'error', message: error.message })
+        return ctx.response.unprocessableEntity({ status: 'error', message: error.message })
       }
       throw error
     }
+  }
+
+  /** Vincula este equipo al negocio con el código que ve el dueño. */
+  async pair(ctx: HttpContext) {
+    return this.manejar(ctx, () => StaffService.vincular(ctx.request.input('code'), ctx.request.input('name')))
+  }
+
+  async info(ctx: HttpContext) {
+    return this.manejar(ctx, async () => {
+      const info = await StaffService.infoEquipo(ctx.request.input('deviceToken'))
+      if (!info) throw new OrderError('Este equipo no está vinculado')
+      return info
+    })
+  }
+
+  async login(ctx: HttpContext) {
+    return this.manejar(ctx, async () => {
+      const { token, staff, negocio } = await StaffService.entrar(
+        ctx.request.input('deviceToken'),
+        ctx.request.input('pin')
+      )
+      return { token: token.toJSON(), name: staff.name, role: staff.role, negocio }
+    })
   }
 }

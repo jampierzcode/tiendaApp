@@ -3,7 +3,7 @@ import { BaseModel, belongsTo, column } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 import User from '#models/user'
 
-export type StaffRole = 'mesero' | 'cajero'
+export type StaffRole = 'mesero' | 'cajero' | 'gerente'
 
 /**
  * Personal del negocio (meseras, cajeros). Cada uno tiene un `users` propio
@@ -29,6 +29,9 @@ export default class BusinessStaff extends BaseModel {
 
   @column({ serializeAs: null })
   declare pinHash: string
+
+  @column({ serializeAs: null })
+  declare pinLookup: string | null
 
   @column()
   declare isActive: boolean

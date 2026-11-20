@@ -4,6 +4,18 @@ import db from '@adonisjs/lucid/services/db'
 import type { HttpContext } from '@adonisjs/core/http'
 
 export default class CategoriesController {
+  /** Área de impresión por defecto de los platos de la categoría (PDV de salón). */
+  static async aplicarArea(businessId: number, category: Category, valor: unknown) {
+    if (valor === undefined) return
+    const id = Number(valor) || null
+    if (id) {
+      const existe = await db.from('production_areas').where('business_id', businessId).andWhere('id', id).first()
+      if (!existe) return
+    }
+    category.productionAreaId = id
+    await category.save()
+  }
+
   public async index({ business }: HttpContext) {
     const categories = await Category.query()
       .where('business_id', business.id)
@@ -54,6 +66,7 @@ export default class CategoriesController {
       imageUrl: data.image_url ?? null,
       description: data.description ?? null,
     })
+    await CategoriesController.aplicarArea(business.id, category, request.input('production_area_id'))
 
     return { status: 'success', message: 'Categoría creada', data: category }
   }
@@ -79,6 +92,7 @@ export default class CategoriesController {
     })
 
     await category.save()
+    await CategoriesController.aplicarArea(business.id, category, request.input('production_area_id'))
 
     return { status: 'success', message: 'Categoría actualizada', data: category }
   }

@@ -5,7 +5,8 @@ import CashSession from '#models/cash_session'
 import Shift from '#models/shift'
 import { OrderError } from '#services/order_service'
 import PricingService from '#services/pricing_service'
-import SalonService, { type Actor } from '#services/salon_service'
+import SalonService from '#services/salon_service'
+import PermissionService, { type Actor } from '#services/permission_service'
 import db from '@adonisjs/lucid/services/db'
 import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 import { DateTime } from 'luxon'
@@ -19,8 +20,18 @@ const hora = (d: DateTime | null) => (d ? d.setZone('America/Lima').toFormat('dd
  * Turnos, sesiones de caja y cortes X / Z / global.
  */
 export default class CashService {
-  private static exigirCaja(actor: Actor) {
-    if (actor.role === 'mesero') throw new OrderError('Solo el dueño o caja maneja la caja')
+  /** Qué ve el actor de los montos: todo, solo lo que contó (ciego) o nada. */
+  static visibilidad(actor: Actor): 'todo' | 'ciego' | 'nada' {
+    return (actor.permisos['caja.ver_esperado'] as 'todo' | 'ciego' | 'nada') ?? 'nada'
+  }
+
+  /** Para cerrar una caja ajena hace falta un permiso más. */
+  private static async exigirSobreSesion(business: Business, actor: Actor, sesion: CashSession, pin?: string | null) {
+    if (sesion.userId === actor.userId) {
+      await PermissionService.exigir(business, actor, 'caja.operar', { pin })
+    } else {
+      await PermissionService.exigir(business, actor, 'caja.cerrar_otras', { pin, contexto: `Caja ${sesion.id}` })
+    }
   }
 
   /** Cajas del negocio; si no tiene ninguna se crea "Caja principal". */
@@ -57,6 +68,7 @@ export default class CashService {
       ? await CashSession.query().where('shift_id', turno.id).preload('register').orderBy('id', 'asc')
       : []
     const mia = await this.sesionPara(business, actor.userId)
+    void mia
     const mesasAbiertas = await db
       .from('orders')
       .where('business_id', business.id)
@@ -83,10 +95,19 @@ export default class CashService {
           openedAt: s.openedAt.toISO(),
           closedAt: s.closedAt?.toISO() ?? null,
           zNumber: s.zNumber,
-          difference: s.difference,
-          resumen: s.status === 'abierta' ? await this.calcular(s) : null,
+          difference: this.visibilidad(actor) === 'todo' ? s.difference : null,
+          propia: s.userId === actor.userId,
+          resumen: s.status === 'abierta' && this.visibilidad(actor) === 'todo' ? await this.calcular(s) : null,
+          pendientesMeseros: s.status === 'abierta' ? await this.pendientesMeseros(s, actor) : [],
         }))
       ),
+      visibilidad: this.visibilidad(actor),
+      permisos: {
+        operar: PermissionService.tiene(actor, 'caja.operar'),
+        corteX: PermissionService.tiene(actor, 'caja.corte_x'),
+        cerrarOtras: PermissionService.tiene(actor, 'caja.cerrar_otras'),
+        corteGlobal: PermissionService.tiene(actor, 'caja.corte_global'),
+      },
       miSesion: mia?.id ?? null,
       mesasAbiertas: Number(mesasAbiertas?.n ?? 0),
     }
@@ -94,11 +115,16 @@ export default class CashService {
 
   // --------------------------------------------------------------- apertura
 
-  static async abrir(business: Business, actor: Actor, datos: { registerId?: number; openingFloat?: number }) {
-    this.exigirCaja(actor)
+  static async abrir(
+    business: Business,
+    actor: Actor,
+    datos: { registerId?: number; openingFloat?: number; pin?: string | null }
+  ) {
+    await PermissionService.exigir(business, actor, 'caja.operar', { pin: datos.pin })
     const fondo = r2(Math.max(0, Number(datos.openingFloat ?? 0)))
     const cajas = await this.cajas(business)
-    const caja = datos.registerId ? cajas.find((c) => c.id === Number(datos.registerId)) : cajas[0]
+    const elegida = Number(datos.registerId) || actor.cashRegisterId || null
+    const caja = elegida ? cajas.find((c) => c.id === elegida) : cajas[0]
     if (!caja) throw new OrderError('La caja no existe')
 
     try {
@@ -139,7 +165,7 @@ export default class CashService {
   }
 
   static async crearCaja(business: Business, actor: Actor, nombre: string) {
-    if (actor.role !== 'dueno') throw new OrderError('Solo el dueño crea cajas')
+    if (actor.role !== 'dueno') throw new OrderError('Solo el dueño crea cajas (Infraestructura → Cajas)')
     const name = String(nombre ?? '').trim().slice(0, 60)
     if (!name) throw new OrderError('Escribe el nombre de la caja')
     return CashRegister.create({ businessId: business.id, name, isActive: true })
@@ -151,10 +177,10 @@ export default class CashService {
     business: Business,
     actor: Actor,
     sessionId: number,
-    datos: { type: string; amount: number; reason: string }
+    datos: { type: string; amount: number; reason: string; pin?: string | null }
   ) {
-    this.exigirCaja(actor)
     const sesion = await this.sesionAbierta(business, sessionId)
+    await this.exigirSobreSesion(business, actor, sesion, datos.pin)
     const monto = r2(Number(datos.amount))
     if (!Number.isFinite(monto) || monto <= 0) throw new OrderError('Monto no válido')
     const motivo = String(datos.reason ?? '').trim().slice(0, 160)
@@ -163,7 +189,11 @@ export default class CashService {
     if (tipo === 'retiro') {
       const r = await this.calcular(sesion)
       if (monto > r.efectivoEsperado + 0.009) {
-        throw new OrderError(`En caja debería haber ${r.efectivoEsperado.toFixed(2)} en efectivo`)
+        throw new OrderError(
+          this.visibilidad(actor) === 'todo'
+            ? `En caja debería haber ${r.efectivoEsperado.toFixed(2)} en efectivo`
+            : 'El retiro es mayor que el efectivo que hay en caja'
+        )
       }
     }
     return CashMovement.create({
@@ -256,8 +286,8 @@ export default class CashService {
   }
 
   /** Corte X: cómo va la caja, sin cerrarla. */
-  static async corteX(business: Business, actor: Actor, sessionId: number, imprimir = true) {
-    this.exigirCaja(actor)
+  static async corteX(business: Business, actor: Actor, sessionId: number, imprimir = true, pin?: string | null) {
+    await PermissionService.exigir(business, actor, 'caja.corte_x', { pin, contexto: `Corte X caja ${sessionId}` })
     const sesion = await this.sesionAbierta(business, sessionId)
     const r = await this.calcular(sesion)
     if (imprimir) {
@@ -279,9 +309,19 @@ export default class CashService {
     business: Business,
     actor: Actor,
     sessionId: number,
-    datos: { declared: Record<string, unknown>; note?: string | null }
+    datos: { declared: Record<string, unknown>; note?: string | null; pin?: string | null }
   ) {
-    this.exigirCaja(actor)
+    const previa = await this.sesionAbierta(business, sessionId)
+    await this.exigirSobreSesion(business, actor, previa, datos.pin)
+    const faltan = await this.pendientesMeseros(previa)
+    if (faltan.some((p) => !p.declarado)) {
+      throw new OrderError(
+        `Antes del corte Z recibe lo cobrado por: ${faltan
+          .filter((p) => !p.declarado)
+          .map((p) => p.nombre)
+          .join(', ')}`
+      )
+    }
 
     const declarado: Record<string, number> = {}
     for (const m of METODOS) {
@@ -337,16 +377,112 @@ export default class CashService {
       diferencia,
       nota: sesion.note,
     }
-    await SalonService.encolar(null, business, { kind: 'corte_z', printerId: null, orderId: null, payload })
-    return payload
+    // El ticket del Z muestra lo esperado solo si quien cierra puede verlo;
+    // si no, sale lo declarado y el dueño ve la diferencia en el panel.
+    const vis = this.visibilidad(actor)
+    const impreso =
+      vis === 'todo'
+        ? payload
+        : {
+            ...payload,
+            ciego: true,
+            porMetodo: [],
+            totalVentas: null,
+            efectivoEsperado: null,
+            ingresos: null,
+            retiros: null,
+            diferencia: null,
+            lineas: payload.lineas.map((l) => ({ metodo: l.metodo, declarado: l.declarado })),
+          }
+    await SalonService.encolar(null, business, { kind: 'corte_z', printerId: null, orderId: null, payload: impreso })
+    return vis === 'nada' ? { z: payload.z, cerrada: true, ciego: true } : impreso
+  }
+
+  // ------------------------------------------------- lo que cobran los meseros
+
+  /**
+   * Quién, aparte del responsable de la caja, cobró dentro de ella y cuánto
+   * tiene que entregar por método. `esperado` solo se muestra a quien puede ver.
+   */
+  static async pendientesMeseros(sesion: CashSession, actor?: Actor) {
+    const filas = await db
+      .from('payments')
+      .where('cash_session_id', sesion.id)
+      .whereNotNull('user_id')
+      .whereNot('user_id', sesion.userId ?? 0)
+      .groupBy('user_id', 'method')
+      .select('user_id', 'method', db.raw('SUM(amount) as total'))
+    const ya = await db.from('cash_collector_declarations').where('cash_session_id', sesion.id)
+    const porUsuario = new Map<number, Record<string, number>>()
+    for (const f of filas) {
+      const m = porUsuario.get(f.user_id) ?? {}
+      m[f.method] = r2(Number(f.total))
+      porUsuario.set(f.user_id, m)
+    }
+    const ids = [...porUsuario.keys()]
+    const nombres = new Map<number, string>()
+    if (ids.length) {
+      for (const s of await db.from('business_staff').whereIn('user_id', ids).select('user_id', 'name')) nombres.set(s.user_id, s.name)
+      for (const u of await db.from('users').whereIn('id', ids).select('id', 'name')) if (!nombres.has(u.id)) nombres.set(u.id, u.name)
+    }
+    const ver = !actor || this.visibilidad(actor) === 'todo'
+    return ids.map((id) => {
+      const d = ya.find((x) => x.user_id === id)
+      return {
+        userId: id,
+        nombre: nombres.get(id) ?? 'Mesero',
+        metodos: Object.keys(porUsuario.get(id)!),
+        esperado: ver ? porUsuario.get(id)! : null,
+        declarado: d ? JSON.parse(d.declared) : null,
+        diferencia: d && ver ? Number(d.difference) : null,
+        recibidoPor: d?.received_by_name ?? null,
+      }
+    })
+  }
+
+  /** El responsable de la caja recibe lo que cobró un mesero y lo deja declarado. */
+  static async recibirDeMesero(
+    business: Business,
+    actor: Actor,
+    sessionId: number,
+    datos: { userId: number; declared: Record<string, unknown>; pin?: string | null }
+  ) {
+    const sesion = await this.sesionAbierta(business, sessionId)
+    await this.exigirSobreSesion(business, actor, sesion, datos.pin)
+    const pendientes = await this.pendientesMeseros(sesion)
+    const p = pendientes.find((x) => x.userId === Number(datos.userId))
+    if (!p) throw new OrderError('Ese mesero no cobró en esta caja')
+    if (p.declarado) throw new OrderError('Ya se recibió lo de este mesero')
+
+    const declarado: Record<string, number> = {}
+    for (const m of p.metodos) {
+      const n = r2(Number(datos.declared?.[m] ?? 0))
+      if (!Number.isFinite(n) || n < 0) throw new OrderError(`Monto no válido en ${m}`)
+      declarado[m] = n
+    }
+    const esperado = p.esperado!
+    const diferencia = r2(p.metodos.reduce((t, m) => t + (declarado[m] ?? 0) - (esperado[m] ?? 0), 0))
+    await db.table('cash_collector_declarations').insert({
+      business_id: business.id,
+      cash_session_id: sesion.id,
+      user_id: p.userId,
+      user_name: p.nombre,
+      declared: JSON.stringify(declarado),
+      expected: JSON.stringify(esperado),
+      difference: diferencia,
+      received_by_user_id: actor.userId,
+      received_by_name: actor.name,
+      created_at: new Date(),
+    })
+    return this.visibilidad(actor) === 'todo' ? { declarado, esperado, diferencia } : { declarado }
   }
 
   /**
    * Corte global: cierra el turno con todas sus cajas ya cerradas y deja el
    * resumen del día (ventas, métodos, diferencias, anulaciones y más vendidos).
    */
-  static async cierreGlobal(business: Business, actor: Actor, opciones: { force?: boolean } = {}) {
-    if (actor.role !== 'dueno') throw new OrderError('Solo el dueño hace el corte global')
+  static async cierreGlobal(business: Business, actor: Actor, opciones: { force?: boolean; pin?: string | null } = {}) {
+    await PermissionService.exigir(business, actor, 'caja.corte_global', { pin: opciones.pin, contexto: 'Corte global' })
     const turno = await this.turnoAbierto(business)
     if (!turno) throw new OrderError('No hay un turno abierto')
 
@@ -470,7 +606,7 @@ export default class CashService {
   }
 
   static async reimprimirGlobal(business: Business, actor: Actor, shiftId: number) {
-    if (actor.role === 'mesero') throw new OrderError('Sin permiso')
+    await PermissionService.exigir(business, actor, 'caja.corte_global')
     const t = await Shift.query().where('business_id', business.id).andWhere('id', shiftId).first()
     if (!t?.summary) throw new OrderError('Turno no encontrado')
     await SalonService.encolar(null, business, { kind: 'corte_global', printerId: null, orderId: null, payload: t.summary })

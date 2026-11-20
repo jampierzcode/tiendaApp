@@ -2,7 +2,7 @@ import type Business from '#models/business'
 import Category from '#models/category'
 import CategoryProduct from '#models/category_product'
 import DiningTable from '#models/dining_table'
-import Order from '#models/order'
+import Order, { type OrderService as Servicio } from '#models/order'
 import OrderItem from '#models/order_item'
 import OrderItemModifier from '#models/order_item_modifier'
 import OrderRound from '#models/order_round'
@@ -11,54 +11,113 @@ import PrintJob, { type PrintKind } from '#models/print_job'
 import Product from '#models/product'
 import ProductModifierGroup from '#models/product_modifier_group'
 import ProductionArea from '#models/production_area'
+import FolioService from '#services/folio_service'
 import IngredientService from '#services/ingredient_service'
 import OrderService, { OrderError, type LineaMenu } from '#services/order_service'
-import PosService, { type CobroMostrador } from '#services/pos_service'
+import PermissionService, { type Actor } from '#services/permission_service'
+import type { CobroMostrador } from '#services/pos_service'
+import PosSettingsService, { type AjustesPos } from '#services/pos_settings_service'
 import PricingService from '#services/pricing_service'
 import PromotionService from '#services/promotion_service'
 import db from '@adonisjs/lucid/services/db'
 import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 import { DateTime } from 'luxon'
 
-/** Quién hace la operación: el dueño o alguien del personal. */
-export interface Actor {
-  userId: number
-  name: string
-  role: 'dueno' | 'cajero' | 'mesero'
-}
+export type { Actor }
 
 export interface DatosComanda {
-  tableId: number
+  /** Comedor: la mesa. */
+  tableId?: number | null
+  /** Cuenta ya abierta (para llevar, delivery o una mesa liberada). */
+  orderId?: number | null
+  /** Cuenta nueva sin mesa. */
+  service?: Servicio | null
+  alias?: string | null
+  customerName?: string | null
+  customerPhone?: string | null
+  deliveryAddress?: string | null
   /** Generado por el celular: si reintenta sin señal, la ronda no se duplica. */
   clientRequestId: string
   guests?: number | null
   items: LineaMenu[]
 }
 
+/** Autorización de un superior que viaja con la petición. */
+export interface ConPin {
+  pin?: string | null
+}
+
 const r2 = PricingService.redondear
 
+export const NOMBRE_SERVICIO: Record<Servicio, string> = {
+  comedor: 'Comedor',
+  para_llevar: 'Para llevar',
+  delivery: 'Delivery',
+}
+
+/** Qué estilo de ticket usa cada tipo de impresión. */
+const ESTILO_DE: Record<PrintKind, keyof AjustesPos['ticket']['tipos']> = {
+  comanda: 'comanda',
+  anulacion: 'comanda',
+  prueba: 'comanda',
+  precuenta: 'cuenta',
+  nota_venta: 'nota_venta',
+  cancelacion: 'cancelacion',
+  corte_x: 'corte',
+  corte_z: 'corte',
+  corte_global: 'corte',
+}
+
 /**
- * PDV de salón: cuentas abiertas por mesa.
+ * PDV de salón: cuentas por mesa o sin mesa (para llevar, delivery).
  *
- * La cuenta es un `order` (channel 'salon', status 'abierta') para que los
- * cobros, los reportes y el consumo de insumos sigan en un solo sitio. Cada
- * "Enviar comanda" es una ronda y genera un trabajo de impresión por área.
+ * La cuenta es un `order` (channel 'salon', status 'abierta'). Mientras está
+ * abierta tiene su propio estado (`account_status`): abierta → impresa (con
+ * folio) → reabierta → impresa… Al cobrar pasa a 'entregado'. La mesa tiene
+ * el suyo: libre, ocupada, cuenta impresa o por liberar.
  */
 export default class SalonService {
-  static puedeCobrar(actor: Actor) {
-    return actor.role !== 'mesero'
+  // ------------------------------------------------------------- utilidades
+
+  static puedeVer(actor: Actor, order: Order) {
+    return actor.permisos['cuentas.ver'] === 'todas' || order.openedByUserId === actor.userId
   }
 
-  private static exigirCaja(actor: Actor) {
-    if (!this.puedeCobrar(actor)) {
-      throw new OrderError('Solo el dueño o caja puede hacer esto')
+  private static exigirVisible(actor: Actor, order: Order) {
+    if (!this.puedeVer(actor, order)) throw new OrderError('Esta cuenta es de otro mesero')
+  }
+
+  private static async cuentaBloqueada(business: Business, orderId: number, trx: TransactionClientContract) {
+    const order = await Order.query({ client: trx })
+      .where('business_id', business.id)
+      .andWhere('id', orderId)
+      .andWhere('channel', 'salon')
+      .forUpdate()
+      .first()
+    if (!order) throw new OrderError('Cuenta no encontrada')
+    return order
+  }
+
+  private static exigirAbierta(order: Order) {
+    if (order.status !== 'abierta') throw new OrderError('La cuenta ya está cerrada')
+  }
+
+  private static exigirEditable(order: Order) {
+    this.exigirAbierta(order)
+    if (order.accountStatus === 'impresa') {
+      throw new OrderError('La cuenta ya se imprimió. Reábrela para modificarla.')
     }
+  }
+
+  static etiqueta(order: Order) {
+    if (order.service === 'comedor' && order.diningTableId) return `Mesa ${order.tableLabel ?? ''}`.trim()
+    return order.tableLabel || order.customerName
   }
 
   // ---------------------------------------------------------------- lectura
 
-  /** Mesas con su cuenta abierta (si tienen). */
-  static async mesas(business: Business) {
+  /** Mesas con su estado y la cuenta que tienen (si el actor puede verla). */
+  static async mesas(business: Business, actor: Actor) {
     const mesas = await DiningTable.query()
       .where('business_id', business.id)
       .andWhere('is_active', true)
@@ -69,31 +128,93 @@ export default class SalonService {
       .where('business_id', business.id)
       .andWhere('channel', 'salon')
       .andWhere('status', 'abierta')
+      .whereNotNull('dining_table_id')
       .withCount('items', (q) => q.whereNull('voided_at'))
 
-    const meseros = await this.nombresDeUsuarios(abiertas.map((o) => o.openedByUserId))
+    const nombres = await this.nombresDeUsuarios(abiertas.map((o) => o.openedByUserId))
     const porMesa = new Map(abiertas.map((o) => [o.diningTableId, o]))
 
     return mesas.map((m) => {
       const o = porMesa.get(m.id)
+      const estado = o
+        ? o.accountStatus === 'impresa'
+          ? 'impresa'
+          : 'ocupada'
+        : m.needsRelease
+          ? 'por_liberar'
+          : 'libre'
       return {
         id: m.id,
         name: m.name,
         zone: m.zone,
         seats: m.seats,
-        cuenta: o
-          ? {
-              id: o.id,
-              code: o.code,
-              total: Number(o.total),
-              guests: o.guests,
-              items: Number(o.$extras.items_count ?? 0),
-              abiertaDesde: o.createdAt.toISO(),
-              mesero: o.openedByUserId ? (meseros.get(o.openedByUserId) ?? null) : null,
-            }
-          : null,
+        estado,
+        cuenta: o ? this.resumenCuenta(o, actor, nombres) : null,
       }
     })
+  }
+
+  private static resumenCuenta(o: Order, actor: Actor, nombres: Map<number, string>) {
+    const visible = this.puedeVer(actor, o)
+    return {
+      id: o.id,
+      propia: o.openedByUserId === actor.userId,
+      visible,
+      mesero: o.openedByUserId ? (nombres.get(o.openedByUserId) ?? null) : null,
+      service: o.service,
+      etiqueta: this.etiqueta(o),
+      accountStatus: o.accountStatus,
+      folio: FolioService.texto(o.folioSeries, o.folioNumber),
+      total: visible ? Number(o.total) : null,
+      guests: o.guests,
+      items: Number(o.$extras.items_count ?? 0),
+      abiertaDesde: o.createdAt.toISO(),
+      mesa: o.diningTableId ? o.tableLabel : null,
+    }
+  }
+
+  /**
+   * Cuentas de servicio con búsqueda por folio, nombre, mesa, teléfono o
+   * mesero. Con `cerradas`, las de las últimas 24 h ya cobradas o canceladas.
+   */
+  static async cuentas(business: Business, actor: Actor, filtros: { q?: string; cerradas?: boolean } = {}) {
+    const q = Order.query()
+      .where('business_id', business.id)
+      .andWhere('channel', 'salon')
+      .withCount('items', (i) => i.whereNull('voided_at'))
+      .orderBy('id', 'desc')
+      .limit(100)
+
+    if (filtros.cerradas) {
+      q.whereIn('status', ['entregado', 'cancelado']).andWhere(
+        'closed_at',
+        '>=',
+        DateTime.now().minus({ hours: 24 }).toSQL()!
+      )
+    } else {
+      q.where('status', 'abierta')
+    }
+    if (actor.permisos['cuentas.ver'] !== 'todas') q.andWhere('opened_by_user_id', actor.userId)
+
+    const texto = String(filtros.q ?? '').trim()
+    if (texto) {
+      const num = Number(texto.replace(/\D/g, ''))
+      q.where((w) => {
+        w.whereILike('table_label', `%${texto}%`)
+          .orWhereILike('customer_name', `%${texto}%`)
+          .orWhereILike('code', `%${texto}%`)
+          .orWhereILike('customer_phone', `%${texto}%`)
+        if (num) w.orWhere('folio_number', num)
+        w.orWhereIn(
+          'opened_by_user_id',
+          db.from('business_staff').where('business_id', business.id).whereILike('name', `%${texto}%`).select('user_id')
+        )
+      })
+    }
+
+    const lista = await q
+    const nombres = await this.nombresDeUsuarios(lista.map((o) => o.openedByUserId))
+    return lista.map((o) => ({ ...this.resumenCuenta(o, actor, nombres), status: o.status }))
   }
 
   /** Carta para comandar: platos activos con sus modificadores. */
@@ -156,8 +277,8 @@ export default class SalonService {
     }
   }
 
-  /** La cuenta completa de una mesa, con rondas, anulados y pagos. */
-  static async cuenta(business: Business, orderId: number) {
+  /** La cuenta completa, con rondas, anulados y pagos. `actor` null = uso interno. */
+  static async cuenta(business: Business, actor: Actor | null, orderId: number) {
     const order = await Order.query()
       .where('business_id', business.id)
       .andWhere('id', orderId)
@@ -166,29 +287,37 @@ export default class SalonService {
       .preload('payments')
       .first()
     if (!order) throw new OrderError('Cuenta no encontrada')
+    if (actor) this.exigirVisible(actor, order)
 
     const rondas = await OrderRound.query().where('order_id', order.id).orderBy('number', 'asc')
-    const mesa = order.diningTableId ? await DiningTable.find(order.diningTableId) : null
+    const nombres = await this.nombresDeUsuarios([order.openedByUserId, ...order.payments.map((p) => p.userId)])
 
     return {
       id: order.id,
       code: order.code,
       status: order.status,
-      mesa: mesa ? { id: mesa.id, name: mesa.name } : { id: null, name: order.tableLabel },
+      accountStatus: order.accountStatus,
+      service: order.service,
+      etiqueta: this.etiqueta(order),
+      mesa: { id: order.diningTableId, name: order.diningTableId ? order.tableLabel : null },
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      deliveryAddress: order.deliveryAddress,
       guests: order.guests,
+      mesero: order.openedByUserId ? (nombres.get(order.openedByUserId) ?? null) : null,
+      propia: actor ? order.openedByUserId === actor.userId : false,
       subtotal: Number(order.subtotal),
       discountTotal: Number(order.discountTotal),
+      discountReason: order.discountReason,
       total: Number(order.total),
       paidTotal: Number(order.paidTotal),
-      documento: order.documentSeries ? `${order.documentSeries}-${String(order.documentNumber).padStart(6, '0')}` : null,
+      folio: FolioService.texto(order.folioSeries, order.folioNumber),
+      documento: FolioService.texto(order.folioSeries, order.folioNumber),
+      printCount: order.printCount,
+      reopenCount: order.reopenCount,
       abiertaDesde: order.createdAt.toISO(),
       cerradaEn: order.closedAt?.toISO() ?? null,
-      rondas: rondas.map((r) => ({
-        id: r.id,
-        number: r.number,
-        userName: r.userName,
-        createdAt: r.createdAt.toISO(),
-      })),
+      rondas: rondas.map((r) => ({ id: r.id, number: r.number, userName: r.userName, createdAt: r.createdAt.toISO() })),
       items: order.items.map((i) => ({
         id: i.id,
         roundId: i.orderRoundId,
@@ -202,17 +331,22 @@ export default class SalonService {
         modifiers: i.modifiers.map((m) => ({ name: m.optionName, quantity: m.quantity })),
         voided: Boolean(i.voidedAt),
         voidReason: i.voidReason,
+        courtesy: i.isCourtesy,
+        courtesyReason: i.isCourtesy ? i.promotionName : null,
       })),
-      payments: order.payments.map((p) => ({ method: p.method, amount: Number(p.amount) })),
+      payments: order.payments.map((p) => ({
+        method: p.method,
+        amount: Number(p.amount),
+        cobradoPor: p.userId ? (nombres.get(p.userId) ?? null) : null,
+      })),
     }
   }
 
   // --------------------------------------------------------------- comandar
 
   /**
-   * Envía una ronda de la mesa. Abre la cuenta si la mesa estaba libre.
-   * Es idempotente por `clientRequestId`: el celular de la mesera puede
-   * reintentar las veces que quiera sin duplicar platos.
+   * Envía una ronda. Abre la cuenta si hace falta: en la mesa (comedor) o
+   * sin mesa (para llevar / delivery). Es idempotente por `clientRequestId`.
    */
   static async comandar(business: Business, actor: Actor, datos: DatosComanda) {
     const requestId = String(datos.clientRequestId ?? '').trim().slice(0, 64)
@@ -224,12 +358,30 @@ export default class SalonService {
       .first()
     if (repetida) return { orderId: repetida.orderId, roundId: repetida.id, repetida: true }
 
-    const mesa = await DiningTable.query()
-      .where('business_id', business.id)
-      .andWhere('id', Number(datos.tableId))
-      .andWhere('is_active', true)
-      .first()
-    if (!mesa) throw new OrderError('La mesa no existe')
+    const ajustes = await PosSettingsService.leer(business)
+
+    let mesa: DiningTable | null = null
+    let servicio: Servicio = 'comedor'
+    if (datos.orderId) {
+      // Ronda sobre una cuenta que ya existe: se valida dentro de la transacción.
+    } else if (datos.tableId) {
+      if (!ajustes.servicios.comedor) throw new OrderError('El servicio de comedor está apagado')
+      mesa = await DiningTable.query()
+        .where('business_id', business.id)
+        .andWhere('id', Number(datos.tableId))
+        .andWhere('is_active', true)
+        .first()
+      if (!mesa) throw new OrderError('La mesa no existe')
+    } else {
+      servicio = datos.service === 'delivery' ? 'delivery' : 'para_llevar'
+      if (!ajustes.servicios[servicio]) throw new OrderError(`El servicio ${NOMBRE_SERVICIO[servicio]} está apagado`)
+      await PermissionService.exigir(business, actor, 'cuentas.abrir_sin_mesa')
+      if (servicio === 'delivery') {
+        if (!datos.customerName?.trim()) throw new OrderError('Falta el nombre del cliente')
+        if (!datos.customerPhone?.trim()) throw new OrderError('Falta el teléfono del cliente')
+        if (!datos.deliveryAddress?.trim()) throw new OrderError('Falta la dirección de entrega')
+      }
+    }
 
     // Validación y precios fuera de la transacción: no escribe nada.
     const { lineas } = await OrderService.prepararLineasMenu(business, datos.items, null)
@@ -237,25 +389,49 @@ export default class SalonService {
 
     const ejecutar = () =>
       db.transaction(async (trx) => {
-        let order = await Order.query({ client: trx })
-          .where('business_id', business.id)
-          .andWhere('dining_table_id', mesa.id)
-          .andWhere('status', 'abierta')
-          .forUpdate()
-          .first()
+        let order: Order | null = null
+
+        if (datos.orderId) {
+          order = await this.cuentaBloqueada(business, Number(datos.orderId), trx)
+          this.exigirVisible(actor, order)
+          this.exigirEditable(order)
+        } else if (mesa) {
+          order = await Order.query({ client: trx })
+            .where('business_id', business.id)
+            .andWhere('dining_table_id', mesa.id)
+            .andWhere('status', 'abierta')
+            .forUpdate()
+            .first()
+          if (order) {
+            this.exigirVisible(actor, order)
+            this.exigirEditable(order)
+          } else {
+            const fresca = await DiningTable.query({ client: trx }).where('id', mesa.id).forUpdate().firstOrFail()
+            if (fresca.needsRelease) throw new OrderError(`La mesa ${mesa.name} está por liberar`)
+          }
+        }
 
         if (!order) {
+          const alias =
+            servicio === 'comedor'
+              ? mesa!.name
+              : datos.alias?.trim().slice(0, 60) ||
+                datos.customerName?.trim().slice(0, 60) ||
+                `Orden ${await this.siguienteNumeroDelDia(business, trx)}`
           order = await Order.create(
             {
               businessId: business.id,
               code: await OrderService.siguienteCodigo(business, trx),
               channel: 'salon',
+              service: servicio,
               status: 'abierta',
-              customerName: `Mesa ${mesa.name}`,
-              customerPhone: null,
-              deliveryMethod: 'mesa',
-              tableLabel: mesa.name,
-              diningTableId: mesa.id,
+              accountStatus: 'abierta',
+              customerName: servicio === 'comedor' ? `Mesa ${mesa!.name}` : datos.customerName?.trim() || alias,
+              customerPhone: datos.customerPhone?.trim() || null,
+              deliveryMethod: servicio === 'delivery' ? 'envio' : servicio === 'comedor' ? 'mesa' : 'recojo',
+              deliveryAddress: datos.deliveryAddress?.trim() || null,
+              tableLabel: alias,
+              diningTableId: mesa?.id ?? null,
               guests: datos.guests ? Math.max(1, Math.floor(Number(datos.guests))) : null,
               openedByUserId: actor.userId,
               currency: business.currency,
@@ -282,7 +458,7 @@ export default class SalonService {
           { client: trx }
         )
 
-        const creados: { item: OrderItem; mods: string[] }[] = []
+        const creados: OrderItem[] = []
         let bruto = 0
         for (const l of lineas) {
           const area = areas.get(l.producto.id) ?? null
@@ -309,7 +485,6 @@ export default class SalonService {
             },
             { client: trx }
           )
-          const mods: string[] = []
           for (const m of l.modificadores) {
             await OrderItemModifier.create(
               {
@@ -323,50 +498,23 @@ export default class SalonService {
               },
               { client: trx }
             )
-            mods.push(m.quantity > 1 ? `${m.quantity}x ${m.option.name}` : m.option.name)
           }
-          creados.push({ item, mods })
+          await item.load('modifiers')
+          creados.push(item)
         }
 
         order.subtotal = r2(Number(order.subtotal) + bruto)
         order.useTransaction(trx)
         await this.recalcular(order, trx)
 
-        // Un ticket por área. Lo que no tiene área sale por la impresora de caja.
-        const porArea = new Map<number | null, typeof creados>()
-        for (const c of creados) {
-          const k = c.item.productionAreaId ?? null
-          porArea.set(k, [...(porArea.get(k) ?? []), c])
-        }
-        for (const [areaId, lista] of porArea) {
-          const area = areaId ? [...areas.values()].find((a) => a?.id === areaId) : null
-          await this.encolar(trx, business, {
-            kind: 'comanda',
-            printerId: area?.printerId ?? null,
-            orderId: order.id,
-            payload: {
-              area: area?.name ?? 'General',
-              mesa: mesa.name,
-              mesero: actor.name,
-              ronda: ronda.number,
-              cuenta: order.code,
-              items: lista.map((c) => ({
-                cantidad: c.item.quantity,
-                nombre: c.item.productName,
-                opciones: c.mods,
-                nota: c.item.note,
-              })),
-            },
-          })
-        }
-
+        await this.imprimirComandas(trx, business, order, ronda, creados, actor.name, areas)
         return { orderId: order.id, roundId: ronda.id, repetida: false }
       })
 
     try {
       return await ejecutar()
     } catch (error: any) {
-      // Dos meseras abrieron la misma mesa a la vez, o el reintento llegó
+      // Dos personas abrieron la misma mesa a la vez, o el reintento llegó
       // junto con el original: el índice único lo frena y se reintenta una vez.
       if (error?.code === '23505') {
         const ya = await OrderRound.query()
@@ -380,9 +528,66 @@ export default class SalonService {
     }
   }
 
-  /**
-   * Área de cada plato: la suya, o la de su primera categoría que tenga una.
-   */
+  /** Un ticket por área. Lo que no tiene área sale por la impresora de caja. */
+  private static async imprimirComandas(
+    trx: TransactionClientContract | null,
+    business: Business,
+    order: Order,
+    ronda: OrderRound,
+    items: OrderItem[],
+    mesero: string,
+    areas?: Map<number, ProductionArea | null>,
+    reimpresion = false
+  ) {
+    const porArea = new Map<number | null, OrderItem[]>()
+    for (const i of items) {
+      const k = i.productionAreaId ?? null
+      porArea.set(k, [...(porArea.get(k) ?? []), i])
+    }
+    const todas = areas
+      ? [...areas.values()]
+      : await ProductionArea.query(trx ? { client: trx } : {}).where('business_id', business.id)
+    for (const [areaId, lista] of porArea) {
+      const area = areaId ? (todas.find((a) => a?.id === areaId) ?? null) : null
+      await this.encolar(trx, business, {
+        kind: 'comanda',
+        printerId: area?.printerId ?? null,
+        orderId: order.id,
+        payload: {
+          area: area?.name ?? lista[0].productionAreaName ?? 'General',
+          servicio: order.service,
+          mesa: this.etiqueta(order),
+          mesero,
+          ronda: ronda.number,
+          cuenta: order.code,
+          reimpresion,
+          cliente: order.service === 'delivery' ? order.customerName : null,
+          items: lista.map((i) => ({
+            cantidad: i.quantity,
+            nombre: i.productName,
+            opciones: (i.modifiers ?? []).map((m) => (m.quantity > 1 ? `${m.quantity}x ${m.optionName}` : m.optionName)),
+            nota: i.note,
+          })),
+        },
+      })
+    }
+  }
+
+  /** "Orden N" para las cuentas sin nombre: correlativo del día. */
+  private static async siguienteNumeroDelDia(business: Business, trx: TransactionClientContract) {
+    const inicio = DateTime.now().setZone('America/Lima').startOf('day').toUTC().toSQL()!
+    const fila = await trx
+      .from('orders')
+      .where('business_id', business.id)
+      .andWhere('channel', 'salon')
+      .whereNot('service', 'comedor')
+      .andWhere('created_at', '>=', inicio)
+      .count('* as n')
+      .first()
+    return Number(fila?.n ?? 0) + 1
+  }
+
+  /** Área de cada plato: la suya, o la de su primera categoría que tenga una. */
   private static async areasDe(business: Business, productos: Product[]) {
     const areas = await ProductionArea.query().where('business_id', business.id).andWhere('is_active', true)
     const areaPorId = new Map(areas.map((a) => [a.id, a]))
@@ -403,7 +608,6 @@ export default class SalonService {
         if (a && areaPorId.has(a) && !porCategoria.has(l.productId)) porCategoria.set(l.productId, a)
       }
     }
-
     for (const p of productos) {
       const id =
         p.productionAreaId && areaPorId.has(p.productionAreaId) ? p.productionAreaId : porCategoria.get(p.id)
@@ -422,27 +626,93 @@ export default class SalonService {
       .first()
     const total = r2(Number(fila?.total ?? 0))
     order.total = total
-    // Sin nada vigente no queda subtotal (cuenta cancelada o todo anulado).
-    order.subtotal = total === 0 ? 0 : r2(Math.max(Number(order.subtotal), total))
+    order.subtotal = r2(Math.max(Number(order.subtotal), total))
     order.discountTotal = r2(Number(order.subtotal) - total)
+    order.useTransaction(trx)
     await order.save()
   }
 
-  // --------------------------------------------------------------- anular
+  private static async tieneItems(order: Order, trx: TransactionClientContract) {
+    const f = await trx.from('order_items').where('order_id', order.id).whereNull('voided_at').count('* as n').first()
+    return Number(f?.n ?? 0) > 0
+  }
+
+  // ------------------------------------------------------ imprimir / reabrir
 
   /**
-   * Anula un plato ya comandado (o parte: 1 de 3 gaseosas). Queda en la
-   * cuenta tachado, con motivo y quién lo hizo, y sale un aviso a su área.
+   * Imprime la cuenta. La primera vez asigna folio (serie de la caja del
+   * equipo, o la serie por defecto) y la cuenta queda "impresa": ya no se le
+   * agrega nada sin reabrirla. Reimprimir conserva el folio.
    */
+  static async imprimirCuenta(business: Business, actor: Actor, orderId: number, opciones: ConPin = {}) {
+    await PermissionService.exigir(business, actor, 'cuentas.imprimir', {
+      pin: opciones.pin,
+      contexto: `Imprimir cuenta ${orderId}`,
+    })
+    const cajaId = await this.cajaDelActor(business, actor)
+
+    await db.transaction(async (trx) => {
+      const order = await this.cuentaBloqueada(business, orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirAbierta(order)
+      if (!(await this.tieneItems(order, trx))) throw new OrderError('La cuenta está vacía')
+      await FolioService.asignar(business, order, cajaId, trx)
+      order.accountStatus = 'impresa'
+      order.printCount = (order.printCount ?? 0) + 1
+      order.printedAt = DateTime.now()
+      order.useTransaction(trx)
+      await order.save()
+    })
+
+    const datos = await this.cuenta(business, null, orderId)
+    await this.encolar(null, business, {
+      kind: 'precuenta',
+      printerId: null,
+      orderId,
+      payload: {
+        ...this.ticketBase(business, datos),
+        mesero: datos.mesero,
+        pedidoPor: actor.name,
+        copia: datos.printCount > 1,
+      },
+    })
+    return datos
+  }
+
+  /** Reabre una cuenta impresa para agregar o quitar. El folio no cambia. */
+  static async reabrir(business: Business, actor: Actor, orderId: number, opciones: ConPin = {}) {
+    const autorizo = await PermissionService.exigir(business, actor, 'cuentas.reabrir', {
+      pin: opciones.pin,
+      contexto: `Reabrir cuenta ${orderId}`,
+    })
+    await db.transaction(async (trx) => {
+      const order = await this.cuentaBloqueada(business, orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirAbierta(order)
+      if (order.accountStatus !== 'impresa') throw new OrderError('La cuenta no está impresa')
+      order.accountStatus = 'reabierta'
+      order.reopenCount = (order.reopenCount ?? 0) + 1
+      order.useTransaction(trx)
+      await order.save()
+    })
+    return { ok: true, autorizo }
+  }
+
+  // ---------------------------------------------------------------- anular
+
+  /** Anula un plato ya comandado (o parte: 1 de 3). Sale aviso a su área. */
   static async anularItem(
     business: Business,
     actor: Actor,
     itemId: number,
-    datos: { reason: string; quantity?: number }
+    datos: { reason: string; quantity?: number } & ConPin
   ) {
-    this.exigirCaja(actor)
     const motivo = String(datos.reason ?? '').trim().slice(0, 160)
     if (!motivo) throw new OrderError('Escribe el motivo de la anulación')
+    const autorizo = await PermissionService.exigir(business, actor, 'cuentas.anular_plato', {
+      pin: datos.pin,
+      contexto: `Anular plato ${itemId}: ${motivo}`,
+    })
 
     return db.transaction(async (trx) => {
       const item = await OrderItem.query({ client: trx })
@@ -454,131 +724,192 @@ export default class SalonService {
       if (!item) throw new OrderError('Plato no encontrado')
       if (item.voidedAt) throw new OrderError('Ese plato ya está anulado')
 
-      const order = await Order.query({ client: trx }).where('id', item.orderId).forUpdate().firstOrFail()
-      if (order.channel !== 'salon' || order.status !== 'abierta') {
-        throw new OrderError('Solo se anulan platos de una cuenta abierta')
-      }
+      const order = await this.cuentaBloqueada(business, item.orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirEditable(order)
 
       const cantidad = Math.floor(Number(datos.quantity ?? item.quantity))
       if (!Number.isFinite(cantidad) || cantidad < 1 || cantidad > item.quantity) {
         throw new OrderError(`Puedes anular entre 1 y ${item.quantity}`)
       }
 
-      let anulado = item
-      if (cantidad < item.quantity) {
-        // Se parte la línea: la que queda y la anulada, cada una con su total.
-        const unit = Number(item.lineTotal) / item.quantity
-        anulado = await OrderItem.create(
-          {
-            ...item.$attributes,
-            id: undefined,
-            quantity: cantidad,
-            lineTotal: r2(unit * cantidad),
-          } as any,
-          { client: trx }
-        )
-        for (const m of item.modifiers) {
-          await OrderItemModifier.create(
-            { ...m.$attributes, id: undefined, orderItemId: anulado.id } as any,
-            { client: trx }
-          )
-        }
-        item.quantity -= cantidad
-        item.lineTotal = r2(Number(item.lineTotal) - Number(anulado.lineTotal))
-        item.useTransaction(trx)
-        await item.save()
-      }
-
+      const anulado = await this.partir(item, cantidad, trx)
       anulado.voidedAt = DateTime.now()
-      anulado.voidReason = motivo
+      anulado.voidReason = (autorizo ? `${motivo} (autorizó ${autorizo})` : motivo).slice(0, 160)
       anulado.voidedByUserId = actor.userId
       anulado.useTransaction(trx)
       await anulado.save()
 
       // Lo anulado sale también del subtotal; si no, se vería como descuento.
       const pct = Number(anulado.discountPercentage ?? 0)
-      const brutoAnulado = pct > 0 && pct < 100 ? Number(anulado.lineTotal) / (1 - pct / 100) : Number(anulado.lineTotal)
+      const brutoAnulado =
+        pct > 0 && pct < 100 ? Number(anulado.lineTotal) / (1 - pct / 100) : Number(anulado.lineTotal)
       order.subtotal = r2(Math.max(0, Number(order.subtotal) - brutoAnulado))
-      order.useTransaction(trx)
       await this.recalcular(order, trx)
 
-      const area = anulado.productionAreaId ? await ProductionArea.find(anulado.productionAreaId, { client: trx }) : null
+      const area = anulado.productionAreaId
+        ? await ProductionArea.find(anulado.productionAreaId, { client: trx })
+        : null
       await this.encolar(trx, business, {
         kind: 'anulacion',
         printerId: area?.printerId ?? null,
         orderId: order.id,
         payload: {
           area: anulado.productionAreaName ?? 'General',
-          mesa: order.tableLabel,
+          servicio: order.service,
+          mesa: this.etiqueta(order),
           mesero: actor.name,
           cuenta: order.code,
-          motivo,
+          motivo: anulado.voidReason,
           items: [{ cantidad, nombre: anulado.productName, opciones: [], nota: null }],
         },
       })
-
       return { orderId: order.id }
     })
   }
 
-  // ------------------------------------------------------- precuenta / cobro
+  /** Separa `cantidad` unidades de una línea en una línea nueva (para anular o regalar una parte). */
+  private static async partir(item: OrderItem, cantidad: number, trx: TransactionClientContract) {
+    if (cantidad >= item.quantity) return item
+    const unit = Number(item.lineTotal) / item.quantity
+    const nueva = await OrderItem.create(
+      { ...item.$attributes, id: undefined, quantity: cantidad, lineTotal: r2(unit * cantidad) } as any,
+      { client: trx }
+    )
+    for (const m of item.modifiers ?? []) {
+      await OrderItemModifier.create({ ...m.$attributes, id: undefined, orderItemId: nueva.id } as any, {
+        client: trx,
+      })
+    }
+    item.quantity -= cantidad
+    item.lineTotal = r2(Number(item.lineTotal) - Number(nueva.lineTotal))
+    item.useTransaction(trx)
+    await item.save()
+    return nueva
+  }
 
-  /** Imprime la precuenta en la impresora de caja. Cualquiera puede pedirla. */
-  static async precuenta(business: Business, actor: Actor, orderId: number) {
-    const datos = await this.cuenta(business, orderId)
-    if (datos.status !== 'abierta') throw new OrderError('La cuenta ya está cerrada')
-    await this.encolar(null, business, {
-      kind: 'precuenta',
-      printerId: null,
-      orderId,
-      payload: { ...this.ticketBase(business, datos), pedidoPor: actor.name },
+  /** Cortesía: el plato (o parte) queda en la cuenta a S/ 0, con motivo y quién la dio. */
+  static async cortesia(
+    business: Business,
+    actor: Actor,
+    itemId: number,
+    datos: { reason: string; quantity?: number } & ConPin
+  ) {
+    const motivo = String(datos.reason ?? '').trim().slice(0, 160)
+    if (!motivo) throw new OrderError('Escribe el motivo de la cortesía')
+    const autorizo = await PermissionService.exigir(business, actor, 'cobro.cortesia', {
+      pin: datos.pin,
+      contexto: `Cortesía plato ${itemId}: ${motivo}`,
     })
-    return datos
+    return db.transaction(async (trx) => {
+      const item = await OrderItem.query({ client: trx })
+        .where('business_id', business.id)
+        .andWhere('id', itemId)
+        .preload('modifiers')
+        .forUpdate()
+        .first()
+      if (!item || item.voidedAt) throw new OrderError('Plato no encontrado')
+      if (item.isCourtesy) throw new OrderError('Ese plato ya es cortesía')
+      const order = await this.cuentaBloqueada(business, item.orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirEditable(order)
+      const cantidad = Math.min(item.quantity, Math.max(1, Math.floor(Number(datos.quantity ?? item.quantity))))
+      const regalo = await this.partir(item, cantidad, trx)
+      regalo.isCourtesy = true
+      regalo.unitPrice = 0
+      regalo.lineTotal = 0
+      regalo.discountPercentage = 100
+      regalo.promotionName = `Cortesía: ${motivo} (${autorizo ? `autorizó ${autorizo}` : actor.name})`.slice(0, 255)
+      regalo.useTransaction(trx)
+      await regalo.save()
+      await this.recalcular(order, trx)
+      return { orderId: order.id }
+    })
+  }
+
+  // ------------------------------------------------------------------ cobro
+
+  /** Caja a la que cobra el actor: la del equipo, la suya abierta o la única abierta. */
+  static async cajaDelActor(business: Business, actor: Actor): Promise<number | null> {
+    if (actor.cashRegisterId) return actor.cashRegisterId
+    const abiertas = await db
+      .from('cash_sessions')
+      .where('business_id', business.id)
+      .andWhere('status', 'abierta')
+      .select('cash_register_id', 'user_id')
+    return (
+      abiertas.find((s) => s.user_id === actor.userId)?.cash_register_id ??
+      (abiertas.length === 1 ? abiertas[0].cash_register_id : null)
+    )
+  }
+
+  private static async sesionParaCobrar(business: Business, actor: Actor, trx: TransactionClientContract) {
+    const abiertas = await trx
+      .from('cash_sessions')
+      .where('business_id', business.id)
+      .andWhere('status', 'abierta')
+      .select('id', 'user_id', 'cash_register_id')
+    if (actor.cashRegisterId) {
+      const s = abiertas.find((x) => x.cash_register_id === actor.cashRegisterId)
+      if (s) return s
+      throw new OrderError('La caja de este equipo está cerrada. Ábrela para cobrar.')
+    }
+    const s = abiertas.find((x) => x.user_id === actor.userId) ?? (abiertas.length === 1 ? abiertas[0] : null)
+    if (!s) {
+      throw new OrderError(
+        abiertas.length
+          ? 'Hay varias cajas abiertas: asigna una caja a este equipo en Infraestructura → Equipos'
+          : 'No hay caja abierta. Abre la caja antes de cobrar.'
+      )
+    }
+    return s
   }
 
   /**
-   * Cobra y cierra la cuenta: registra los pagos, numera la nota de venta,
-   * descuenta insumos y manda el ticket a la impresora de caja.
+   * Cobra y cierra la cuenta: registra los pagos en la caja que corresponde,
+   * asigna folio si no tenía, descuenta insumos e imprime la nota de venta.
+   * El mesero puede cobrar si su rol lo permite o si alguien lo autoriza; lo
+   * que cobre lo declara después en caja.
    */
   static async cobrar(
     business: Business,
     actor: Actor,
     orderId: number,
-    datos: { payments: CobroMostrador[]; discountPercentage?: number; customerName?: string | null }
+    datos: {
+      payments: CobroMostrador[]
+      discountPercentage?: number
+      discountReason?: string | null
+      customerName?: string | null
+    } & ConPin
   ) {
-    this.exigirCaja(actor)
+    await PermissionService.exigir(business, actor, 'cobro.cobrar', {
+      pin: datos.pin,
+      contexto: `Cobrar cuenta ${orderId}`,
+    })
+    const pct = Math.min(Math.max(Number(datos.discountPercentage ?? 0), 0), 100)
+    let autorizoDescuento: string | null = null
+    if (pct > 0) {
+      if (!String(datos.discountReason ?? '').trim()) throw new OrderError('Escribe el motivo del descuento')
+      autorizoDescuento = await PermissionService.exigir(business, actor, 'cobro.descuento', {
+        pin: datos.pin,
+        valor: pct,
+        contexto: `Descuento ${pct}% cuenta ${orderId}`,
+      })
+    }
+    const ajustes = await PosSettingsService.leer(business)
 
     const resultado = await db.transaction(async (trx) => {
-      const order = await Order.query({ client: trx })
-        .where('business_id', business.id)
-        .andWhere('id', orderId)
-        .andWhere('channel', 'salon')
-        .forUpdate()
-        .first()
-      if (!order) throw new OrderError('Cuenta no encontrada')
-      if (order.status !== 'abierta') throw new OrderError('La cuenta ya está cerrada')
+      const order = await this.cuentaBloqueada(business, orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirAbierta(order)
 
-      order.useTransaction(trx)
       await this.recalcular(order, trx)
-      if (Number(order.total) <= 0) throw new OrderError('La cuenta no tiene nada que cobrar')
+      if (!(await this.tieneItems(order, trx))) throw new OrderError('La cuenta no tiene nada que cobrar')
 
-      // El cobro cae en la caja de quien cobra (o la única abierta): sin caja abierta no se cobra.
-      const cajas = await trx
-        .from('cash_sessions')
-        .where('business_id', business.id)
-        .andWhere('status', 'abierta')
-        .select('id', 'user_id')
-      const caja = cajas.find((c) => c.user_id === actor.userId) ?? (cajas.length === 1 ? cajas[0] : null)
-      if (!caja) {
-        throw new OrderError(
-          cajas.length ? 'Hay varias cajas abiertas: abre la tuya para cobrar' : 'Abre la caja antes de cobrar'
-        )
-      }
+      const sesion = await this.sesionParaCobrar(business, actor, trx)
 
-      const pct = Math.min(Math.max(Number(datos.discountPercentage ?? 0), 0), 100)
       const rebaja = r2((Number(order.total) * pct) / 100)
       const total = r2(Number(order.total) - rebaja)
-
       const cobrado = r2((datos.payments ?? []).reduce((t, p) => t + Number(p.amount || 0), 0))
       if (cobrado < total - 0.009) {
         throw new OrderError(`Falta cobrar: el total es ${total.toFixed(2)} y se registraron ${cobrado.toFixed(2)}`)
@@ -586,7 +917,7 @@ export default class SalonService {
 
       // Lo que se recibe de más es vuelto, no pago.
       let restante = total
-      for (const pago of datos.payments) {
+      for (const pago of datos.payments ?? []) {
         if (restante <= 0) break
         const monto = r2(Math.min(Number(pago.amount), restante))
         if (monto <= 0) continue
@@ -602,19 +933,25 @@ export default class SalonService {
             receiptImageId: pago.receiptImageId ?? null,
             paidAt: DateTime.now(),
             userId: actor.userId,
-            cashSessionId: caja.id,
+            cashSessionId: sesion.id,
           },
           { client: trx }
         )
       }
 
-      const { serie, numero } = await PosService.siguienteTicket(business, trx)
-      order.documentSeries = serie
-      order.documentNumber = numero
+      await FolioService.asignar(business, order, sesion.cash_register_id, trx)
       order.discountTotal = r2(Number(order.discountTotal) + rebaja)
+      if (pct > 0) {
+        order.discountReason =
+          `${pct}%: ${String(datos.discountReason).trim()}${autorizoDescuento ? ` (autorizó ${autorizoDescuento})` : ''}`.slice(
+            0,
+            160
+          )
+      }
       order.total = total
       order.paidTotal = total
       order.status = 'entregado'
+      order.accountStatus = null
       order.closedAt = DateTime.now()
       order.deliveredAt = DateTime.now()
       if (datos.customerName?.trim()) order.customerName = datos.customerName.trim().slice(0, 120)
@@ -623,79 +960,215 @@ export default class SalonService {
         await IngredientService.consumirPedido(order, trx, actor.userId)
         order.stockCommittedAt = DateTime.now()
       }
+      order.useTransaction(trx)
       await order.save()
+
+      // La mesa: libre al cobrar, o "por liberar" si el negocio libera a mano.
+      if (order.diningTableId) {
+        await trx.from('dining_tables').where('id', order.diningTableId).update({ needs_release: ajustes.liberarMesaManual })
+      }
 
       return { vuelto: r2(cobrado - total) }
     })
 
-    const datosCuenta = await this.cuenta(business, orderId)
+    const datosCuenta = await this.cuenta(business, null, orderId)
     await this.encolar(null, business, {
       kind: 'nota_venta',
       printerId: null,
       orderId,
-      payload: { ...this.ticketBase(business, datosCuenta), cajero: actor.name, vuelto: resultado.vuelto },
+      payload: {
+        ...this.ticketBase(business, datosCuenta),
+        mesero: datosCuenta.mesero,
+        cajero: actor.name,
+        vuelto: resultado.vuelto,
+      },
     })
     return { ...datosCuenta, vuelto: resultado.vuelto }
   }
 
-  /** Cierra una cuenta sin cobrar (se fueron, error al abrir la mesa…). */
-  static async cancelarCuenta(business: Business, actor: Actor, orderId: number, reason: string) {
-    this.exigirCaja(actor)
+  /** Reimprime la nota de venta de una cuenta cobrada. */
+  static async reimprimirNota(business: Business, actor: Actor, orderId: number, opciones: ConPin = {}) {
+    await PermissionService.exigir(business, actor, 'cobro.cobrar', {
+      pin: opciones.pin,
+      contexto: `Reimprimir nota de venta ${orderId}`,
+    })
+    const datos = await this.cuenta(business, actor, orderId)
+    if (datos.status !== 'entregado') throw new OrderError('La cuenta aún no se cobra')
+    await this.encolar(null, business, {
+      kind: 'nota_venta',
+      printerId: null,
+      orderId,
+      payload: { ...this.ticketBase(business, datos), mesero: datos.mesero, cajero: actor.name, copia: true },
+    })
+    return { ok: true }
+  }
+
+  /** Reimprime la comanda de una ronda (por ejemplo, si la impresora falló). */
+  static async reimprimirComanda(business: Business, actor: Actor, roundId: number, opciones: ConPin = {}) {
+    await PermissionService.exigir(business, actor, 'cuentas.reimprimir_comanda', { pin: opciones.pin })
+    const ronda = await OrderRound.query().where('business_id', business.id).andWhere('id', roundId).first()
+    if (!ronda) throw new OrderError('Ronda no encontrada')
+    const order = await Order.findOrFail(ronda.orderId)
+    this.exigirVisible(actor, order)
+    const items = await OrderItem.query().where('order_round_id', ronda.id).whereNull('voided_at').preload('modifiers')
+    if (!items.length) throw new OrderError('Esa ronda no tiene platos vigentes')
+    await this.imprimirComandas(null, business, order, ronda, items, ronda.userName ?? actor.name, undefined, true)
+    return { ok: true }
+  }
+
+  /** Cierra una cuenta sin cobrar. Avisa a cada área y deja comprobante en caja. */
+  static async cancelarCuenta(
+    business: Business,
+    actor: Actor,
+    orderId: number,
+    reason: string,
+    opciones: ConPin = {}
+  ) {
     const motivo = String(reason ?? '').trim().slice(0, 160)
     if (!motivo) throw new OrderError('Escribe el motivo')
+    const autorizo = await PermissionService.exigir(business, actor, 'cuentas.cancelar', {
+      pin: opciones.pin,
+      contexto: `Cancelar cuenta ${orderId}: ${motivo}`,
+    })
+    const motivoFinal = (autorizo ? `${motivo} (autorizó ${autorizo})` : motivo).slice(0, 160)
 
     await db.transaction(async (trx) => {
-      const order = await Order.query({ client: trx })
-        .where('business_id', business.id)
-        .andWhere('id', orderId)
-        .andWhere('channel', 'salon')
-        .forUpdate()
-        .first()
-      if (!order) throw new OrderError('Cuenta no encontrada')
-      if (order.status !== 'abierta') throw new OrderError('La cuenta ya está cerrada')
+      const order = await this.cuentaBloqueada(business, orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirAbierta(order)
+
+      const vigentes = await OrderItem.query({ client: trx })
+        .where('order_id', order.id)
+        .whereNull('voided_at')
+        .preload('modifiers')
+
+      // Cada área se entera de lo que ya no debe preparar.
+      const porArea = new Map<number | null, OrderItem[]>()
+      for (const i of vigentes) porArea.set(i.productionAreaId, [...(porArea.get(i.productionAreaId) ?? []), i])
+      for (const [areaId, lista] of porArea) {
+        const area = areaId ? await ProductionArea.find(areaId, { client: trx }) : null
+        await this.encolar(trx, business, {
+          kind: 'anulacion',
+          printerId: area?.printerId ?? null,
+          orderId: order.id,
+          payload: {
+            area: lista[0].productionAreaName ?? 'General',
+            servicio: order.service,
+            mesa: this.etiqueta(order),
+            mesero: actor.name,
+            cuenta: order.code,
+            motivo: `CUENTA CANCELADA: ${motivoFinal}`,
+            items: lista.map((i) => ({ cantidad: i.quantity, nombre: i.productName, opciones: [], nota: null })),
+          },
+        })
+      }
+      // Y caja queda con el comprobante de la cancelación.
+      await this.encolar(trx, business, {
+        kind: 'cancelacion',
+        printerId: null,
+        orderId: order.id,
+        payload: {
+          negocio: business.name,
+          simbolo: business.currencySymbol || 'S/',
+          mesa: this.etiqueta(order),
+          cuenta: order.code,
+          folio: FolioService.texto(order.folioSeries, order.folioNumber),
+          canceladoPor: actor.name,
+          motivo: motivoFinal,
+          total: Number(order.total),
+          lineas: vigentes.map((i) => ({ cantidad: i.quantity, nombre: i.productName, total: Number(i.lineTotal) })),
+        },
+      })
 
       await OrderItem.query({ client: trx })
         .where('order_id', order.id)
         .whereNull('voided_at')
-        .update({ voided_at: DateTime.now().toSQL(), void_reason: motivo, voided_by_user_id: actor.userId })
+        .update({ voided_at: DateTime.now().toSQL(), void_reason: motivoFinal, voided_by_user_id: actor.userId })
 
       order.status = 'cancelado'
+      order.accountStatus = null
       order.closedAt = DateTime.now()
-      order.note = `Cancelada: ${motivo}`
-      order.useTransaction(trx)
+      order.note = `Cancelada: ${motivoFinal}`
+      order.subtotal = 0
       await this.recalcular(order, trx)
     })
     return { ok: true }
   }
 
-  /** Pasa la cuenta a otra mesa libre. */
-  static async moverMesa(business: Business, actor: Actor, orderId: number, tableId: number) {
-    const destino = await DiningTable.query()
-      .where('business_id', business.id)
-      .andWhere('id', tableId)
-      .andWhere('is_active', true)
-      .first()
-    if (!destino) throw new OrderError('La mesa no existe')
+  // ------------------------------------------------------------------ mesas
 
-    const ocupada = await Order.query()
-      .where('business_id', business.id)
-      .andWhere('dining_table_id', destino.id)
-      .andWhere('status', 'abierta')
-      .first()
-    if (ocupada) throw new OrderError(`La mesa ${destino.name} ya tiene una cuenta abierta`)
+  /** Pasa la cuenta a otra mesa libre (o le asigna una si estaba sin mesa). */
+  static async moverMesa(business: Business, actor: Actor, orderId: number, tableId: number, opciones: ConPin = {}) {
+    await PermissionService.exigir(business, actor, 'cuentas.mover_mesa', {
+      pin: opciones.pin,
+      contexto: `Mover cuenta ${orderId}`,
+    })
+    await db.transaction(async (trx) => {
+      const order = await this.cuentaBloqueada(business, orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirAbierta(order)
+      const destino = await DiningTable.query({ client: trx })
+        .where('business_id', business.id)
+        .andWhere('id', tableId)
+        .andWhere('is_active', true)
+        .forUpdate()
+        .first()
+      if (!destino) throw new OrderError('La mesa no existe')
+      if (destino.needsRelease) throw new OrderError(`La mesa ${destino.name} está por liberar`)
+      const ocupada = await Order.query({ client: trx })
+        .where('dining_table_id', destino.id)
+        .andWhere('status', 'abierta')
+        .first()
+      if (ocupada) throw new OrderError(`La mesa ${destino.name} ya tiene una cuenta abierta`)
+      order.merge({
+        diningTableId: destino.id,
+        tableLabel: destino.name,
+        tableReleasedAt: null,
+        service: 'comedor',
+        customerName: order.service === 'comedor' ? `Mesa ${destino.name}` : order.customerName,
+      })
+      order.useTransaction(trx)
+      await order.save()
+    })
+    return { ok: true }
+  }
 
-    const order = await Order.query()
-      .where('business_id', business.id)
-      .andWhere('id', orderId)
-      .andWhere('status', 'abierta')
-      .first()
-    if (!order) throw new OrderError('Cuenta no encontrada')
-
-    order.diningTableId = destino.id
-    order.tableLabel = destino.name
-    order.customerName = `Mesa ${destino.name}`
-    await order.save()
-    void actor
+  /**
+   * Libera una mesa:
+   *  - "por liberar" (ya se cobró) → libre;
+   *  - con la cuenta impresa → la cuenta sigue abierta sin mesa (el cliente
+   *    pasa a pagar a caja) y la mesa queda libre para otros.
+   */
+  static async liberarMesa(business: Business, actor: Actor, tableId: number, opciones: ConPin = {}) {
+    await PermissionService.exigir(business, actor, 'cuentas.liberar_mesa', {
+      pin: opciones.pin,
+      contexto: `Liberar mesa ${tableId}`,
+    })
+    await db.transaction(async (trx) => {
+      const mesa = await DiningTable.query({ client: trx })
+        .where('business_id', business.id)
+        .andWhere('id', tableId)
+        .forUpdate()
+        .first()
+      if (!mesa) throw new OrderError('La mesa no existe')
+      const abierta = await Order.query({ client: trx })
+        .where('dining_table_id', mesa.id)
+        .andWhere('status', 'abierta')
+        .forUpdate()
+        .first()
+      if (abierta) {
+        this.exigirVisible(actor, abierta)
+        if (abierta.accountStatus !== 'impresa') {
+          throw new OrderError('Primero imprime la cuenta: así queda con folio para cobrarla en caja')
+        }
+        abierta.merge({ diningTableId: null, tableLabel: `Mesa ${mesa.name}`, tableReleasedAt: DateTime.now() })
+        abierta.useTransaction(trx)
+        await abierta.save()
+      }
+      mesa.needsRelease = false
+      mesa.useTransaction(trx)
+      await mesa.save()
+    })
     return { ok: true }
   }
 
@@ -706,7 +1179,7 @@ export default class SalonService {
     const lineas = new Map<string, { cantidad: number; nombre: string; total: number }>()
     for (const i of c.items) {
       if (i.voided) continue
-      const nombre = [i.name, ...i.modifiers.map((m) => m.name)].join(' + ')
+      const nombre = [i.name, ...i.modifiers.map((m) => m.name)].join(' + ') + (i.courtesy ? ' (cortesia)' : '')
       const k = `${nombre}|${i.unitPrice}`
       const prev = lineas.get(k)
       lineas.set(k, {
@@ -720,29 +1193,54 @@ export default class SalonService {
       direccion: [business.address, business.city].filter(Boolean).join(', ') || null,
       telefono: business.phone ?? business.whatsappPhone ?? null,
       simbolo: business.currencySymbol || 'S/',
-      mesa: c.mesa.name,
+      servicio: c.service,
+      mesa: c.etiqueta,
+      cliente: c.service !== 'comedor' ? c.customerName : null,
+      direccionCliente: c.service === 'delivery' ? c.deliveryAddress : null,
+      telefonoCliente: c.service === 'delivery' ? c.customerPhone : null,
+      comensales: c.guests,
       cuenta: c.code,
-      documento: c.documento,
+      documento: c.folio,
+      folio: c.folio,
       lineas: [...lineas.values()],
       subtotal: c.subtotal,
       descuento: c.discountTotal,
+      motivoDescuento: c.discountReason,
       total: c.total,
       pagos: c.payments,
     }
   }
 
+  /**
+   * Encola un ticket. Le adjunta el estilo vigente del negocio para que la
+   * central no tenga que pedirlo: lo que se ve en el ticket queda fijo.
+   */
   static async encolar(
     trx: TransactionClientContract | null,
     business: Business,
     datos: { kind: PrintKind; printerId: number | null; orderId: number | null; payload: Record<string, any> }
   ) {
+    const ajustes = await PosSettingsService.leer(business)
+    const t = ajustes.ticket
+    const estilo = {
+      general: {
+        nombre: t.nombre || business.name,
+        ruc: t.ruc || null,
+        direccion: t.direccion || null,
+        telefono: t.telefono || null,
+        encabezado: t.encabezado || null,
+        pie: t.pie || null,
+        leyenda: t.leyenda || null,
+      },
+      tipo: t.tipos[ESTILO_DE[datos.kind]],
+    }
     return PrintJob.create(
       {
         businessId: business.id,
         printerId: datos.printerId,
         orderId: datos.orderId,
         kind: datos.kind,
-        payload: { ...datos.payload, hora: DateTime.now().setZone('America/Lima').toFormat('dd/LL HH:mm') },
+        payload: { ...datos.payload, estilo, hora: DateTime.now().setZone('America/Lima').toFormat('dd/LL HH:mm') },
         status: 'pendiente',
         attempts: 0,
       },

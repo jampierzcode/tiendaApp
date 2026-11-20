@@ -23,6 +23,20 @@ type CategoryLinkInput = { categoryId: number; subcategoryId?: number | null }
  * `:businessUuid` de la ruta. Ningún método vuelve a deducirlo del usuario.
  */
 export default class ProductsController {
+  /**
+   * Área de impresión del plato (PDV de salón). `undefined` = no se toca;
+   * null o 0 = vuelve a la de su categoría. Solo acepta áreas del negocio.
+   */
+  static async aplicarArea(businessId: number, productId: number, valor: unknown) {
+    if (valor === undefined) return
+    const id = Number(valor) || null
+    if (id) {
+      const existe = await db.from('production_areas').where('business_id', businessId).andWhere('id', id).first()
+      if (!existe) return
+    }
+    await db.from('products').where('id', productId).andWhere('business_id', businessId).update({ production_area_id: id })
+  }
+
   /** Preguntas frecuentes del formulario: solo pares completos, recortados, máx. 20. */
   static async limpiarFaqs(businessId: number, entrada: unknown): Promise<ProductFaq[]> {
     if (!Array.isArray(entrada)) return []
@@ -336,6 +350,7 @@ export default class ProductsController {
       })
     }
 
+    await ProductsController.aplicarArea(business.id, product.id, request.input('production_area_id'))
     await product.refresh()
     await product.load('variations', (v) =>
       v.preload('attributes', (a) => a.preload('value', (val) => val.preload('attribute')))
@@ -626,6 +641,9 @@ export default class ProductsController {
           ? product.aiFaqs
           : await ProductsController.limpiarFaqs(business.id, request.input('ai_faqs')),
     })
+
+    await ProductsController.aplicarArea(business.id, product.id, request.input('production_area_id'))
+    if (request.input('production_area_id') !== undefined) await product.refresh()
 
     try {
       await db.transaction(async (trx) => {

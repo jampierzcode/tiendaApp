@@ -25,6 +25,10 @@ export default class Business extends BaseModel {
   @column()
   declare name: string
 
+  /** Código de 6 dígitos para vincular equipos del PDV. */
+  @column({ serializeAs: null })
+  declare posPairingCode: string | null
+
   @column()
   declare description: string | null
 

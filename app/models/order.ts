@@ -18,6 +18,8 @@ export type OrderStatus =
   | 'cancelado'
   | 'devuelto'
 
+export type OrderService = 'comedor' | 'para_llevar' | 'delivery'
+
 export type OrderChannel = 'whatsapp' | 'mostrador' | 'online' | 'salon'
 
 export default class Order extends BaseModel {
@@ -40,6 +42,10 @@ export default class Order extends BaseModel {
 
   @column()
   declare channel: OrderChannel
+
+  /** Comedor (mesa), para llevar o delivery. */
+  @column()
+  declare service: OrderService
 
   @column()
   declare status: OrderStatus
@@ -89,6 +95,31 @@ export default class Order extends BaseModel {
 
   @column.dateTime()
   declare closedAt: DateTime | null
+
+  /** Estado de la cuenta del PDV mientras está abierta: abierta, impresa o reabierta. */
+  @column()
+  declare accountStatus: 'abierta' | 'impresa' | 'reabierta' | null
+
+  @column()
+  declare folioSeries: string | null
+
+  @column()
+  declare folioNumber: number | null
+
+  @column()
+  declare printCount: number
+
+  @column()
+  declare reopenCount: number
+
+  @column.dateTime()
+  declare printedAt: DateTime | null
+
+  @column.dateTime()
+  declare tableReleasedAt: DateTime | null
+
+  @column()
+  declare discountReason: string | null
 
   @column.dateTime()
   declare readyAt: DateTime | null

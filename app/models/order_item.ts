@@ -77,6 +77,9 @@ export default class OrderItem extends BaseModel {
   declare voidReason: string | null
 
   @column()
+  declare isCourtesy: boolean
+
+  @column()
   declare voidedByUserId: number | null
 
   @hasMany(() => OrderItemModifier)
