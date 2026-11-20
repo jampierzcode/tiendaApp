@@ -404,6 +404,7 @@ router
     router.post('/salon/accounts/:id/reopen', [SalonController, 'reopen'])
     router.post('/salon/accounts/:id/pay', [SalonController, 'pay'])
     router.post('/salon/accounts/:id/reprint-note', [SalonController, 'reprintNote'])
+    router.post('/salon/accounts/:id/reopen-paid', [SalonController, 'reopenPaid'])
     router.post('/salon/accounts/:id/cancel', [SalonController, 'cancel'])
     router.post('/salon/accounts/:id/move', [SalonController, 'move'])
     router.post('/salon/rounds/:roundId/reprint', [SalonController, 'reprintRound'])

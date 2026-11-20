@@ -222,11 +222,17 @@ export default class SalonService {
       .limit(100)
 
     if (filtros.cerradas) {
-      q.whereIn('status', ['entregado', 'cancelado']).andWhere(
-        'closed_at',
-        '>=',
-        DateTime.now().minus({ hours: 24 }).toSQL()!
-      )
+      // Las del turno abierto; sin turno, las de las últimas 24 h.
+      const turno = await db
+        .from('shifts')
+        .where('business_id', business.id)
+        .andWhere('status', 'abierto')
+        .select('opened_at')
+        .first()
+      const desde = turno
+        ? DateTime.fromJSDate(turno.opened_at)
+        : DateTime.now().minus({ hours: 24 })
+      q.whereIn('status', ['entregado', 'cancelado']).andWhere('closed_at', '>=', desde.toSQL()!)
     } else {
       q.where('status', 'abierta')
     }
@@ -259,7 +265,12 @@ export default class SalonService {
 
     const lista = await q
     const nombres = await this.nombresDeUsuarios(lista.map((o) => o.openedByUserId))
-    return lista.map((o) => ({ ...this.resumenCuenta(o, actor, nombres), status: o.status }))
+    return lista.map((o) => ({
+      ...this.resumenCuenta(o, actor, nombres),
+      status: o.status,
+      motivo: o.status === 'cancelado' ? o.note : null,
+      reabierta: o.reopenCount > 0,
+    }))
   }
 
   /** Carta para comandar: platos activos con sus modificadores. */
@@ -1070,14 +1081,35 @@ export default class SalonService {
       const rebaja = r2(((Number(order.total) - Number(order.shippingCost ?? 0)) * pct) / 100)
       const total = r2(Number(order.total) - rebaja)
       const cobrado = r2((datos.payments ?? []).reduce((t, p) => t + Number(p.amount || 0), 0))
-      if (cobrado < total - 0.009) {
+      // Una cuenta reabierta ya tenía pagos: solo se cobra (o devuelve) la diferencia.
+      const yaPagado = r2(Number(order.paidTotal ?? 0))
+      const pendiente = r2(total - yaPagado)
+      if (pendiente > 0 && cobrado < pendiente - 0.009) {
         throw new OrderError(
-          `Falta cobrar: el total es ${total.toFixed(2)} y se registraron ${cobrado.toFixed(2)}`
+          yaPagado > 0
+            ? `Falta cobrar la diferencia: ${pendiente.toFixed(2)} (ya se habían pagado ${yaPagado.toFixed(2)})`
+            : `Falta cobrar: el total es ${total.toFixed(2)} y se registraron ${cobrado.toFixed(2)}`
+        )
+      }
+      if (pendiente < -0.009) {
+        // Bajó el total: se devuelve la diferencia (por defecto en efectivo).
+        await Payment.create(
+          {
+            businessId: business.id,
+            orderId: order.id,
+            method: datos.payments?.[0]?.method ?? 'efectivo',
+            amount: pendiente,
+            note: 'Devolución de la diferencia',
+            paidAt: DateTime.now(),
+            userId: actor.userId,
+            cashSessionId: sesion.id,
+          },
+          { client: trx }
         )
       }
 
       // Lo que se recibe de más es vuelto, no pago.
-      let restante = total
+      let restante = Math.max(0, pendiente)
       for (const pago of datos.payments ?? []) {
         if (restante <= 0) break
         const monto = r2(Math.min(Number(pago.amount), restante))
@@ -1132,7 +1164,10 @@ export default class SalonService {
           .update({ needs_release: ajustes.liberarMesaManual })
       }
 
-      return { vuelto: r2(cobrado - total) }
+      return {
+        vuelto: r2(cobrado - Math.max(0, pendiente)),
+        devuelto: pendiente < 0 ? r2(-pendiente) : 0,
+      }
     })
 
     const datosCuenta = await this.cuenta(business, null, orderId)
@@ -1147,7 +1182,118 @@ export default class SalonService {
         vuelto: resultado.vuelto,
       },
     })
-    return { ...datosCuenta, vuelto: resultado.vuelto }
+    return { ...datosCuenta, vuelto: resultado.vuelto, devuelto: resultado.devuelto }
+  }
+
+  /**
+   * Reabre una cuenta ya cobrada (como en posAplication): solo del turno
+   * abierto, con motivo y con permiso propio. Los pagos se quedan y al volver
+   * a cobrar solo se cobra (o devuelve) la diferencia; con `devolver` se
+   * devuelve todo ahora y la cuenta queda como sin pagar. El folio no cambia.
+   */
+  static async reabrirCobrada(
+    business: Business,
+    actor: Actor,
+    orderId: number,
+    datos: { reason: string; devolver?: boolean } & ConPin
+  ) {
+    const motivo = String(datos.reason ?? '')
+      .trim()
+      .slice(0, 160)
+    if (!motivo) throw new OrderError('Escribe el motivo de la reapertura')
+    const autorizo = await PermissionService.exigir(business, actor, 'cuentas.reabrir_cobrada', {
+      pin: datos.pin,
+      contexto: `Reabrir cuenta cobrada ${orderId}: ${motivo}`,
+    })
+
+    await db.transaction(async (trx) => {
+      const order = await this.cuentaBloqueada(business, orderId, trx)
+      this.exigirVisible(actor, order)
+      if (order.status !== 'entregado') throw new OrderError('Solo se reabren cuentas cobradas')
+
+      // Solo del turno abierto: lo de un turno ya cortado no se toca.
+      const turno = await trx
+        .from('shifts')
+        .where('business_id', business.id)
+        .andWhere('status', 'abierto')
+        .select('id')
+        .first()
+      const sesiones = await trx
+        .from('payments')
+        .join('cash_sessions', 'cash_sessions.id', 'payments.cash_session_id')
+        .where('payments.order_id', order.id)
+        .distinct('cash_sessions.shift_id')
+      if (!turno || sesiones.some((x) => x.shift_id !== turno.id)) {
+        throw new OrderError('Solo se reabren cuentas cobradas en el turno abierto')
+      }
+
+      if (datos.devolver) {
+        // Se devuelve lo cobrado, método por método, desde la caja de quien reabre.
+        const sesion = await this.sesionParaCobrar(business, actor, trx)
+        const porMetodo = await trx
+          .from('payments')
+          .where('order_id', order.id)
+          .groupBy('method')
+          .select('method', db.raw('SUM(amount) as total'))
+        for (const f of porMetodo) {
+          const monto = r2(Number(f.total))
+          if (monto <= 0) continue
+          await Payment.create(
+            {
+              businessId: business.id,
+              orderId: order.id,
+              method: f.method,
+              amount: -monto,
+              note: `Devolución por reapertura: ${motivo}`.slice(0, 255),
+              paidAt: DateTime.now(),
+              userId: actor.userId,
+              cashSessionId: sesion.id,
+            },
+            { client: trx }
+          )
+        }
+        order.paidTotal = 0
+      }
+
+      // Los insumos se devuelven; se vuelven a descontar al cobrar de nuevo.
+      if (order.stockCommittedAt) {
+        await IngredientService.reponerPedido(order, trx, actor.userId)
+        order.stockCommittedAt = null
+      }
+
+      // La mesa vuelve a ocuparse si sigue libre; si ya la usa otra cuenta, queda sin mesa.
+      if (order.diningTableId) {
+        const otra = await trx
+          .from('orders')
+          .where('dining_table_id', order.diningTableId)
+          .andWhere('status', 'abierta')
+          .whereNot('id', order.id)
+          .first()
+        if (otra) {
+          order.diningTableId = null
+          order.tableReleasedAt = DateTime.now()
+        } else {
+          await trx
+            .from('dining_tables')
+            .where('id', order.diningTableId)
+            .update({ needs_release: false })
+        }
+      }
+
+      order.status = 'abierta'
+      order.accountStatus = 'reabierta'
+      order.reopenCount = (order.reopenCount ?? 0) + 1
+      order.closedAt = null
+      order.deliveredAt = null
+      order.note =
+        `${order.note ? `${order.note} · ` : ''}Reabierta: ${motivo} (${autorizo ? `autorizó ${autorizo}` : actor.name})`.slice(
+          0,
+          500
+        )
+      order.useTransaction(trx)
+      await order.save()
+    })
+    return { ok: true, autorizo }
   }
 
   /** Reimprime la nota de venta de una cuenta cobrada. */
@@ -1234,6 +1380,9 @@ export default class SalonService {
       const order = await this.cuentaBloqueada(business, orderId, trx)
       this.exigirVisible(actor, order)
       this.exigirAbierta(order)
+      if (Number(order.paidTotal ?? 0) > 0.009) {
+        throw new OrderError('La cuenta ya tiene pagos: reábrela con devolución o cóbrala')
+      }
 
       const vigentes = await OrderItem.query({ client: trx })
         .where('order_id', order.id)

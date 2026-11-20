@@ -220,6 +220,16 @@ export default class SalonController {
     )
   }
 
+  async reopenPaid(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.reabrirCobrada(ctx.business, a, Number(ctx.params.id), {
+        reason: ctx.request.input('reason'),
+        devolver: ctx.request.input('devolver') === true,
+        pin: this.pin(ctx),
+      })
+    )
+  }
+
   async reprintNote(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
       SalonService.reimprimirNota(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) })

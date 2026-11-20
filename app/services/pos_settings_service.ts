@@ -18,28 +18,65 @@ export const PERMISOS = {
     tipo: 'alcance',
     opciones: { propias: 'Solo las que él abrió', todas: 'Todas' },
   },
-  'cuentas.abrir_sin_mesa': { grupo: 'Cuentas', label: 'Abrir cuentas para llevar y delivery', tipo: 'si_no' },
-  'cuentas.imprimir': { grupo: 'Cuentas', label: 'Imprimir la cuenta (asigna folio)', tipo: 'si_no' },
-  'cuentas.reabrir': { grupo: 'Cuentas', label: 'Reabrir una cuenta impresa para agregar', tipo: 'si_no' },
+  'cuentas.abrir_sin_mesa': {
+    grupo: 'Cuentas',
+    label: 'Abrir cuentas para llevar y delivery',
+    tipo: 'si_no',
+  },
+  'cuentas.imprimir': {
+    grupo: 'Cuentas',
+    label: 'Imprimir la cuenta (asigna folio)',
+    tipo: 'si_no',
+  },
+  'cuentas.reabrir': {
+    grupo: 'Cuentas',
+    label: 'Reabrir una cuenta impresa (aún sin cobrar)',
+    tipo: 'si_no',
+  },
+  'cuentas.reabrir_cobrada': {
+    grupo: 'Cuentas',
+    label: 'Reabrir una cuenta ya cobrada (con o sin devolución)',
+    tipo: 'si_no',
+  },
   'cuentas.mover_mesa': { grupo: 'Cuentas', label: 'Cambiar de mesa', tipo: 'si_no' },
   'cuentas.liberar_mesa': { grupo: 'Cuentas', label: 'Liberar mesas', tipo: 'si_no' },
   'cuentas.reimprimir_comanda': { grupo: 'Cuentas', label: 'Reimprimir comandas', tipo: 'si_no' },
-  'cuentas.anular_plato': { grupo: 'Cuentas', label: 'Anular platos ya enviados a cocina', tipo: 'si_no' },
+  'cuentas.anular_plato': {
+    grupo: 'Cuentas',
+    label: 'Anular platos ya enviados a cocina',
+    tipo: 'si_no',
+  },
   'cuentas.cancelar': { grupo: 'Cuentas', label: 'Cancelar una cuenta completa', tipo: 'si_no' },
   'cobro.cobrar': { grupo: 'Cobro', label: 'Cobrar cuentas', tipo: 'si_no' },
   'cobro.descuento': { grupo: 'Cobro', label: 'Descuento máximo que puede dar (%)', tipo: 'tope' },
   'cobro.cortesia': { grupo: 'Cobro', label: 'Dar cortesías (plato gratis)', tipo: 'si_no' },
-  'caja.operar': { grupo: 'Caja', label: 'Abrir caja, ingresos/retiros y corte Z de su caja', tipo: 'si_no' },
+  'caja.operar': {
+    grupo: 'Caja',
+    label: 'Abrir caja, ingresos/retiros y corte Z de su caja',
+    tipo: 'si_no',
+  },
   'caja.corte_x': { grupo: 'Caja', label: 'Sacar corte X', tipo: 'si_no' },
-  'caja.cerrar_otras': { grupo: 'Caja', label: 'Cerrar cajas de otros y recibir lo de los meseros', tipo: 'si_no' },
+  'caja.cerrar_otras': {
+    grupo: 'Caja',
+    label: 'Cerrar cajas de otros y recibir lo de los meseros',
+    tipo: 'si_no',
+  },
   'caja.ver_esperado': {
     grupo: 'Caja',
     label: 'Qué ve de los montos de caja',
     tipo: 'alcance',
-    opciones: { todo: 'Todo (esperado y diferencias)', ciego: 'Solo lo que él contó', nada: 'Nada' },
+    opciones: {
+      todo: 'Todo (esperado y diferencias)',
+      ciego: 'Solo lo que él contó',
+      nada: 'Nada',
+    },
   },
   'caja.corte_global': { grupo: 'Caja', label: 'Hacer el corte global del turno', tipo: 'si_no' },
-  'autorizar.otros': { grupo: 'Supervisión', label: 'Autorizar con su PIN lo que otros no pueden', tipo: 'si_no' },
+  'autorizar.otros': {
+    grupo: 'Supervisión',
+    label: 'Autorizar con su PIN lo que otros no pueden',
+    tipo: 'si_no',
+  },
 } as const
 
 export type Permiso = keyof typeof PERMISOS
@@ -51,6 +88,7 @@ const MESERO: MapaPermisos = {
   'cuentas.abrir_sin_mesa': true,
   'cuentas.imprimir': true,
   'cuentas.reabrir': false,
+  'cuentas.reabrir_cobrada': false,
   'cuentas.mover_mesa': false,
   'cuentas.liberar_mesa': true,
   'cuentas.reimprimir_comanda': true,
@@ -84,6 +122,7 @@ export const PERMISOS_POR_DEFECTO: Record<RolPos, MapaPermisos> = {
     'cuentas.abrir_sin_mesa': true,
     'cuentas.imprimir': true,
     'cuentas.reabrir': true,
+    'cuentas.reabrir_cobrada': true,
     'cuentas.mover_mesa': true,
     'cuentas.liberar_mesa': true,
     'cuentas.reimprimir_comanda': true,
@@ -161,8 +200,31 @@ export const AJUSTES_POR_DEFECTO: AjustesPos = {
         detalle: { tamano: 2, negrita: true },
         campos: { mesero: true, hora: true, ronda: true, servicio: true, cuenta: true },
       }),
-      cuenta: estilo({ campos: { direccion: true, telefono: true, ruc: true, mesero: true, folio: true, hora: true, comensales: true, leyenda: true } }),
-      nota_venta: estilo({ campos: { direccion: true, telefono: true, ruc: true, mesero: true, folio: true, hora: true, pagos: true, vuelto: true, cajero: true } }),
+      cuenta: estilo({
+        campos: {
+          direccion: true,
+          telefono: true,
+          ruc: true,
+          mesero: true,
+          folio: true,
+          hora: true,
+          comensales: true,
+          leyenda: true,
+        },
+      }),
+      nota_venta: estilo({
+        campos: {
+          direccion: true,
+          telefono: true,
+          ruc: true,
+          mesero: true,
+          folio: true,
+          hora: true,
+          pagos: true,
+          vuelto: true,
+          cajero: true,
+        },
+      }),
       cancelacion: estilo({ campos: { motivo: true, firma: true } }),
       corte: estilo({ titulo: { tamano: 2, negrita: true }, campos: { firma: true, top: true } }),
     },
@@ -174,7 +236,8 @@ function mezclar<T>(base: T, guardado: any): T {
   if (guardado === null || guardado === undefined) return base
   if (typeof base !== 'object' || Array.isArray(base)) return guardado as T
   const out: any = { ...base }
-  for (const k of Object.keys(guardado)) out[k] = k in (base as any) ? mezclar((base as any)[k], guardado[k]) : guardado[k]
+  for (const k of Object.keys(guardado))
+    out[k] = k in (base as any) ? mezclar((base as any)[k], guardado[k]) : guardado[k]
   return out
 }
 
@@ -197,7 +260,10 @@ export default class PosSettingsService {
   static async guardar(business: Business, cambios: Partial<AjustesPos>) {
     const actual = await this.leer(business)
     const nuevo = mezclar(actual, this.limpiar(cambios))
-    await db.from('businesses').where('id', business.id).update({ pos_settings: JSON.stringify(nuevo) })
+    await db
+      .from('businesses')
+      .where('id', business.id)
+      .update({ pos_settings: JSON.stringify(nuevo) })
     return nuevo
   }
 
@@ -213,13 +279,17 @@ export default class PosSettingsService {
           const v = c.permisos[rol][k]
           if (v === undefined) continue
           if (def.tipo === 'si_no') out.permisos[rol][k] = Boolean(v)
-          else if (def.tipo === 'tope') out.permisos[rol][k] = Math.min(100, Math.max(0, Number(v) || 0))
+          else if (def.tipo === 'tope')
+            out.permisos[rol][k] = Math.min(100, Math.max(0, Number(v) || 0))
           else if (def.tipo === 'alcance' && v in def.opciones) out.permisos[rol][k] = v
         }
       }
     }
     if (c?.inactividadSegundos !== undefined) {
-      out.inactividadSegundos = Math.min(7200, Math.max(0, Math.floor(Number(c.inactividadSegundos) || 0)))
+      out.inactividadSegundos = Math.min(
+        7200,
+        Math.max(0, Math.floor(Number(c.inactividadSegundos) || 0))
+      )
     }
     if (c?.liberarMesaManual !== undefined) out.liberarMesaManual = Boolean(c.liberarMesaManual)
     if (c?.servicios) {
@@ -239,14 +309,25 @@ export default class PosSettingsService {
           const e = c.ticket.tipos[tipo]
           if (!e) continue
           const sec = (x: any) =>
-            x ? { tamano: [1, 2, 3].includes(Number(x.tamano)) ? Number(x.tamano) : 1, negrita: Boolean(x.negrita) } : undefined
+            x
+              ? {
+                  tamano: [1, 2, 3].includes(Number(x.tamano)) ? Number(x.tamano) : 1,
+                  negrita: Boolean(x.negrita),
+                }
+              : undefined
           t.tipos[tipo] = {
-            ...(e.copias !== undefined ? { copias: Math.min(5, Math.max(1, Math.floor(Number(e.copias) || 1))) } : {}),
+            ...(e.copias !== undefined
+              ? { copias: Math.min(5, Math.max(1, Math.floor(Number(e.copias) || 1))) }
+              : {}),
             ...(e.titulo ? { titulo: sec(e.titulo) } : {}),
             ...(e.detalle ? { detalle: sec(e.detalle) } : {}),
             ...(e.total ? { total: sec(e.total) } : {}),
             ...(e.campos && typeof e.campos === 'object'
-              ? { campos: Object.fromEntries(Object.entries(e.campos).map(([k, v]) => [k.slice(0, 30), Boolean(v)])) }
+              ? {
+                  campos: Object.fromEntries(
+                    Object.entries(e.campos).map(([k, v]) => [k.slice(0, 30), Boolean(v)])
+                  ),
+                }
               : {}),
           }
         }
