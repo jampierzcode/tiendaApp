@@ -51,6 +51,8 @@ export interface ConPin {
 
 const r2 = PricingService.redondear
 
+const sinTildes = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
 export const NOMBRE_SERVICIO: Record<Servicio, string> = {
   comedor: 'Comedor',
   para_llevar: 'Para llevar',
@@ -116,13 +118,21 @@ export default class SalonService {
   }
 
   /** Cómo se nombra la cuenta en pantalla y en los tickets: "Mesa 4 · M003", "L007 · Juan". */
+  /**
+   * El nombre de la cuenta: si tiene mesa, el de la mesa ("Mesa 4"); si no,
+   * su número del día (M001, L005, D001). El cliente va aparte.
+   */
   static etiqueta(order: Order) {
-    const num = order.accountName
-    if (order.service === 'comedor' && order.diningTableId) {
-      return [`Mesa ${order.tableLabel ?? ''}`.trim(), num].filter(Boolean).join(' · ')
-    }
-    const nombre = order.tableLabel && order.tableLabel !== num ? order.tableLabel : null
-    return [num, nombre].filter(Boolean).join(' · ') || order.customerName
+    if (order.diningTableId) return `Mesa ${order.tableLabel ?? ''}`.trim()
+    return order.accountName || order.tableLabel || order.customerName
+  }
+
+  /** Cliente de la cuenta, si se le asignó uno (o se escribió su nombre). */
+  static cliente(order: Order) {
+    if (order.customerId) return order.customerName
+    if (order.service === 'comedor') return null
+    const n = order.customerName?.trim()
+    return n && n !== order.accountName && !/^Mesa /.test(n) ? n : null
   }
 
   // ---------------------------------------------------------------- lectura
@@ -177,6 +187,8 @@ export default class SalonService {
       mesero: o.openedByUserId ? (nombres.get(o.openedByUserId) ?? null) : null,
       service: o.service,
       etiqueta: this.etiqueta(o),
+      cliente: this.cliente(o),
+      telefono: o.customerPhone,
       accountStatus: o.accountStatus,
       folio: FolioService.texto(o.folioSeries, o.folioNumber),
       total: visible ? Number(o.total) : null,
@@ -186,6 +198,7 @@ export default class SalonService {
       listos: Number(o.$extras.listos ?? 0),
       abiertaDesde: o.createdAt.toISO(),
       mesa: o.diningTableId ? o.tableLabel : null,
+      mesaId: o.diningTableId,
     }
   }
 
@@ -222,9 +235,14 @@ export default class SalonService {
     const texto = String(filtros.q ?? '').trim()
     if (texto) {
       const num = Number(texto.replace(/\D/g, ''))
+      // Sin tildes: "perez" encuentra a "Pérez".
+      const plano = sinTildes(texto).toLowerCase()
+      const col = (c: string) =>
+        db.raw(`translate(lower(${c}), 'áéíóúüñ', 'aeiouun') like ?`, [`%${plano}%`])
       q.where((w) => {
-        w.whereILike('table_label', `%${texto}%`)
-          .orWhereILike('customer_name', `%${texto}%`)
+        w.whereRaw(col('table_label'))
+          .orWhereRaw(col('customer_name'))
+          .orWhereRaw(col("coalesce(account_name, '')"))
           .orWhereILike('code', `%${texto}%`)
           .orWhereILike('customer_phone', `%${texto}%`)
         if (num) w.orWhere('folio_number', num)
@@ -337,6 +355,8 @@ export default class SalonService {
       etiqueta: this.etiqueta(order),
       mesa: { id: order.diningTableId, name: order.diningTableId ? order.tableLabel : null },
       accountName: order.accountName,
+      cliente: this.cliente(order),
+      customerId: order.customerId,
       shippingCost: Number(order.shippingCost ?? 0),
       courier: order.courier,
       shippedAt: order.shippedAt?.toISO() ?? null,
@@ -421,10 +441,17 @@ export default class SalonService {
         .first()
       if (!mesa) throw new OrderError('La mesa no existe')
     } else {
-      servicio = datos.service === 'delivery' ? 'delivery' : 'para_llevar'
+      servicio =
+        datos.service === 'delivery'
+          ? 'delivery'
+          : datos.service === 'comedor'
+            ? 'comedor'
+            : 'para_llevar'
       if (!ajustes.servicios[servicio])
         throw new OrderError(`El servicio ${NOMBRE_SERVICIO[servicio]} está apagado`)
-      await PermissionService.exigir(business, actor, 'cuentas.abrir_sin_mesa')
+      // Comedor sin mesa (M001) lo abre cualquiera; para llevar y delivery según permiso.
+      if (servicio !== 'comedor')
+        await PermissionService.exigir(business, actor, 'cuentas.abrir_sin_mesa')
       if (servicio === 'delivery') {
         if (!datos.customerName?.trim()) throw new OrderError('Falta el nombre del cliente')
         if (!datos.customerPhone?.trim()) throw new OrderError('Falta el teléfono del cliente')
@@ -468,12 +495,9 @@ export default class SalonService {
 
         if (!order) {
           const numero = await this.siguienteNombre(business, servicio, trx)
-          const alias =
-            servicio === 'comedor'
-              ? mesa!.name
-              : datos.alias?.trim().slice(0, 60) ||
-                datos.customerName?.trim().slice(0, 60) ||
-                numero
+          const alias = mesa
+            ? mesa.name
+            : datos.alias?.trim().slice(0, 60) || datos.customerName?.trim().slice(0, 60) || numero
           // Delivery: el cliente queda guardado para la próxima vez (se busca por teléfono).
           const cliente =
             servicio === 'delivery'
@@ -496,8 +520,7 @@ export default class SalonService {
               service: servicio,
               status: 'abierta',
               accountStatus: 'abierta',
-              customerName:
-                servicio === 'comedor' ? `Mesa ${mesa!.name}` : datos.customerName?.trim() || alias,
+              customerName: mesa ? `Mesa ${mesa.name}` : datos.customerName?.trim() || alias,
               customerPhone: cliente?.phone ?? (datos.customerPhone?.trim() || null),
               customerId: cliente?.id ?? null,
               accountName: numero,
@@ -1327,7 +1350,7 @@ export default class SalonService {
         id: o.id,
         etiqueta: this.etiqueta(o),
         accountName: o.accountName,
-        cliente: o.customerName,
+        cliente: this.cliente(o),
         telefono: o.customerPhone,
         direccion: o.deliveryAddress,
         total: Number(o.total),
@@ -1396,12 +1419,64 @@ export default class SalonService {
       .where('business_id', business.id)
       .where((w) => {
         if (digitos.length >= 3) w.whereILike('phone', `%${digitos}%`)
-        w.orWhereILike('name', `%${t}%`)
+        w.orWhereRaw(`translate(lower(name), 'áéíóúüñ', 'aeiouun') like ?`, [
+          `%${sinTildes(t).toLowerCase()}%`,
+        ])
       })
       .orderBy('updated_at', 'desc')
       .limit(8)
       .select('id', 'name', 'phone', 'address', 'city')
     return filas
+  }
+
+  /**
+   * Asigna un cliente a la cuenta (uno guardado, o uno nuevo con nombre y
+   * teléfono). Sirve para buscar la cuenta por cliente y para su historial.
+   */
+  static async asignarCliente(
+    business: Business,
+    actor: Actor,
+    orderId: number,
+    datos: { customerId?: number | null; name?: string | null; phone?: string | null }
+  ) {
+    return db.transaction(async (trx) => {
+      const order = await this.cuentaBloqueada(business, orderId, trx)
+      this.exigirVisible(actor, order)
+      this.exigirAbierta(order)
+      let cliente: { id: number; name: string; phone: string | null } | null = null
+      if (datos.customerId) {
+        cliente = await trx
+          .from('customers')
+          .where('business_id', business.id)
+          .andWhere('id', Number(datos.customerId))
+          .select('id', 'name', 'phone')
+          .first()
+        if (!cliente) throw new OrderError('Cliente no encontrado')
+      } else {
+        const nombre = String(datos.name ?? '').trim()
+        if (!nombre) throw new OrderError('Escribe el nombre del cliente')
+        const telefono = String(datos.phone ?? '').trim()
+        if (!telefono) {
+          // Sin teléfono no se guarda en la libreta: queda solo en esta cuenta.
+          order.customerName = nombre.slice(0, 120)
+          order.customerId = null
+          order.useTransaction(trx)
+          await order.save()
+          return { ok: true }
+        }
+        cliente = await OrderService.registrarCliente(
+          business,
+          { customerName: nombre, customerPhone: telefono, items: [] },
+          trx
+        )
+      }
+      order.customerId = cliente!.id
+      order.customerName = cliente!.name
+      order.customerPhone = cliente!.phone ?? order.customerPhone
+      order.useTransaction(trx)
+      await order.save()
+      return { ok: true }
+    })
   }
 
   // ------------------------------------------------------------------ mesas
@@ -1440,7 +1515,8 @@ export default class SalonService {
         tableLabel: destino.name,
         tableReleasedAt: null,
         service: 'comedor',
-        customerName: order.service === 'comedor' ? `Mesa ${destino.name}` : order.customerName,
+        // El cliente asignado se conserva; si no hay, la cuenta se nombra por la mesa.
+        customerName: order.customerId ? order.customerName : `Mesa ${destino.name}`,
       })
       order.useTransaction(trx)
       await order.save()

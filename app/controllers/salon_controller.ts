@@ -165,6 +165,17 @@ export default class SalonController {
     )
   }
 
+  async setCustomer(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.asignarCliente(
+        ctx.business,
+        a,
+        Number(ctx.params.id),
+        ctx.request.only(['customerId', 'name', 'phone'])
+      )
+    )
+  }
+
   async printAccount(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
       SalonService.imprimirCuenta(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) })

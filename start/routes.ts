@@ -396,6 +396,7 @@ router
     router.get('/salon/customers', [SalonController, 'customers'])
     router.post('/salon/accounts/:id/dispatch', [SalonController, 'dispatch'])
     router.post('/salon/accounts/:id/deliver', [SalonController, 'deliver'])
+    router.post('/salon/accounts/:id/customer', [SalonController, 'setCustomer'])
     router.get('/salon/menu', [SalonController, 'menu'])
     router.post('/salon/command', [SalonController, 'command'])
     router.get('/salon/accounts/:id', [SalonController, 'account'])
