@@ -4,6 +4,7 @@ import OrderService from '#services/order_service'
 import OrderImages from '#services/order_images'
 import IngredientService from '#services/ingredient_service'
 import NotificationService, { EVENTOS, type EventoPedido } from '#services/notification_service'
+import KitchenService from '#services/kitchen_service'
 import db from '@adonisjs/lucid/services/db'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
@@ -208,8 +209,7 @@ export default class OrdersController {
     // Tienda: se descuenta stock de las variaciones. Restaurante: se descuentan
     // los insumos de la receta. En ambos casos solo al confirmar, una vez.
     const debeDescontar = nuevo === 'confirmado' && !order.stockCommittedAt
-    const debeReponer =
-      ['cancelado', 'devuelto'].includes(nuevo) && Boolean(order.stockCommittedAt)
+    const debeReponer = ['cancelado', 'devuelto'].includes(nuevo) && Boolean(order.stockCommittedAt)
     let platosSinReceta: string[] = []
 
     try {
@@ -273,6 +273,17 @@ export default class OrdersController {
         })
       }
       throw error
+    }
+
+    // Restaurante: el pedido aceptado entra a producción (comandas y monitores).
+    if (business.esRestaurante) {
+      try {
+        if (['confirmado', 'pagado', 'preparando'].includes(nuevo))
+          await KitchenService.enviarPedidoOnline(business, order)
+        if (nuevo === 'cancelado') await KitchenService.cancelarPedidoOnline(business, order)
+      } catch {
+        // La cocina nunca debe tumbar el cambio de estado; la comanda se puede reimprimir.
+      }
     }
 
     // Aviso al cliente: si el bot está caído o el negocio no lo usa, no pasa nada.

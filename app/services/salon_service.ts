@@ -87,7 +87,11 @@ export default class SalonService {
     if (!this.puedeVer(actor, order)) throw new OrderError('Esta cuenta es de otro mesero')
   }
 
-  private static async cuentaBloqueada(business: Business, orderId: number, trx: TransactionClientContract) {
+  private static async cuentaBloqueada(
+    business: Business,
+    orderId: number,
+    trx: TransactionClientContract
+  ) {
     const order = await Order.query({ client: trx })
       .where('business_id', business.id)
       .andWhere('id', orderId)
@@ -110,7 +114,8 @@ export default class SalonService {
   }
 
   static etiqueta(order: Order) {
-    if (order.service === 'comedor' && order.diningTableId) return `Mesa ${order.tableLabel ?? ''}`.trim()
+    if (order.service === 'comedor' && order.diningTableId)
+      return `Mesa ${order.tableLabel ?? ''}`.trim()
     return order.tableLabel || order.customerName
   }
 
@@ -130,6 +135,9 @@ export default class SalonService {
       .andWhere('status', 'abierta')
       .whereNotNull('dining_table_id')
       .withCount('items', (q) => q.whereNull('voided_at'))
+      .withCount('items', (q) =>
+        q.whereNull('voided_at').andWhere('kitchen_status', 'listo').as('listos')
+      )
 
     const nombres = await this.nombresDeUsuarios(abiertas.map((o) => o.openedByUserId))
     const porMesa = new Map(abiertas.map((o) => [o.diningTableId, o]))
@@ -168,6 +176,8 @@ export default class SalonService {
       total: visible ? Number(o.total) : null,
       guests: o.guests,
       items: Number(o.$extras.items_count ?? 0),
+      /** Platos que cocina ya terminó y faltan llevar a la mesa. */
+      listos: Number(o.$extras.listos ?? 0),
       abiertaDesde: o.createdAt.toISO(),
       mesa: o.diningTableId ? o.tableLabel : null,
     }
@@ -177,11 +187,18 @@ export default class SalonService {
    * Cuentas de servicio con búsqueda por folio, nombre, mesa, teléfono o
    * mesero. Con `cerradas`, las de las últimas 24 h ya cobradas o canceladas.
    */
-  static async cuentas(business: Business, actor: Actor, filtros: { q?: string; cerradas?: boolean } = {}) {
+  static async cuentas(
+    business: Business,
+    actor: Actor,
+    filtros: { q?: string; cerradas?: boolean } = {}
+  ) {
     const q = Order.query()
       .where('business_id', business.id)
       .andWhere('channel', 'salon')
       .withCount('items', (i) => i.whereNull('voided_at'))
+      .withCount('items', (i) =>
+        i.whereNull('voided_at').andWhere('kitchen_status', 'listo').as('listos')
+      )
       .orderBy('id', 'desc')
       .limit(100)
 
@@ -207,7 +224,11 @@ export default class SalonService {
         if (num) w.orWhere('folio_number', num)
         w.orWhereIn(
           'opened_by_user_id',
-          db.from('business_staff').where('business_id', business.id).whereILike('name', `%${texto}%`).select('user_id')
+          db
+            .from('business_staff')
+            .where('business_id', business.id)
+            .whereILike('name', `%${texto}%`)
+            .select('user_id')
         )
       })
     }
@@ -230,7 +251,9 @@ export default class SalonService {
     const reglas = await ProductModifierGroup.query()
       .where('business_id', business.id)
       .preload('group', (g) =>
-        g.where('is_active', true).preload('options', (o) => o.where('is_active', true).orderBy('sort_order', 'asc'))
+        g
+          .where('is_active', true)
+          .preload('options', (o) => o.where('is_active', true).orderBy('sort_order', 'asc'))
       )
       .orderBy('sort_order', 'asc')
 
@@ -243,7 +266,11 @@ export default class SalonService {
         name: r.group.name,
         minSelect: r.minSelect,
         maxSelect: r.maxSelect,
-        options: r.group.options.map((o) => ({ id: o.id, name: o.name, priceDelta: Number(o.priceDelta) })),
+        options: r.group.options.map((o) => ({
+          id: o.id,
+          name: o.name,
+          priceDelta: Number(o.priceDelta),
+        })),
       })
       gruposPorProducto.set(r.productId, lista)
     }
@@ -290,7 +317,10 @@ export default class SalonService {
     if (actor) this.exigirVisible(actor, order)
 
     const rondas = await OrderRound.query().where('order_id', order.id).orderBy('number', 'asc')
-    const nombres = await this.nombresDeUsuarios([order.openedByUserId, ...order.payments.map((p) => p.userId)])
+    const nombres = await this.nombresDeUsuarios([
+      order.openedByUserId,
+      ...order.payments.map((p) => p.userId),
+    ])
 
     return {
       id: order.id,
@@ -317,7 +347,12 @@ export default class SalonService {
       reopenCount: order.reopenCount,
       abiertaDesde: order.createdAt.toISO(),
       cerradaEn: order.closedAt?.toISO() ?? null,
-      rondas: rondas.map((r) => ({ id: r.id, number: r.number, userName: r.userName, createdAt: r.createdAt.toISO() })),
+      rondas: rondas.map((r) => ({
+        id: r.id,
+        number: r.number,
+        userName: r.userName,
+        createdAt: r.createdAt.toISO(),
+      })),
       items: order.items.map((i) => ({
         id: i.id,
         roundId: i.orderRoundId,
@@ -333,6 +368,7 @@ export default class SalonService {
         voidReason: i.voidReason,
         courtesy: i.isCourtesy,
         courtesyReason: i.isCourtesy ? i.promotionName : null,
+        kitchenStatus: i.kitchenStatus,
       })),
       payments: order.payments.map((p) => ({
         method: p.method,
@@ -349,7 +385,9 @@ export default class SalonService {
    * sin mesa (para llevar / delivery). Es idempotente por `clientRequestId`.
    */
   static async comandar(business: Business, actor: Actor, datos: DatosComanda) {
-    const requestId = String(datos.clientRequestId ?? '').trim().slice(0, 64)
+    const requestId = String(datos.clientRequestId ?? '')
+      .trim()
+      .slice(0, 64)
     if (!requestId) throw new OrderError('Falta el identificador de la comanda')
 
     const repetida = await OrderRound.query()
@@ -374,7 +412,8 @@ export default class SalonService {
       if (!mesa) throw new OrderError('La mesa no existe')
     } else {
       servicio = datos.service === 'delivery' ? 'delivery' : 'para_llevar'
-      if (!ajustes.servicios[servicio]) throw new OrderError(`El servicio ${NOMBRE_SERVICIO[servicio]} está apagado`)
+      if (!ajustes.servicios[servicio])
+        throw new OrderError(`El servicio ${NOMBRE_SERVICIO[servicio]} está apagado`)
       await PermissionService.exigir(business, actor, 'cuentas.abrir_sin_mesa')
       if (servicio === 'delivery') {
         if (!datos.customerName?.trim()) throw new OrderError('Falta el nombre del cliente')
@@ -385,7 +424,10 @@ export default class SalonService {
 
     // Validación y precios fuera de la transacción: no escribe nada.
     const { lineas } = await OrderService.prepararLineasMenu(business, datos.items, null)
-    const areas = await this.areasDe(business, lineas.map((l) => l.producto))
+    const areas = await this.areasDe(
+      business,
+      lineas.map((l) => l.producto)
+    )
 
     const ejecutar = () =>
       db.transaction(async (trx) => {
@@ -406,7 +448,10 @@ export default class SalonService {
             this.exigirVisible(actor, order)
             this.exigirEditable(order)
           } else {
-            const fresca = await DiningTable.query({ client: trx }).where('id', mesa.id).forUpdate().firstOrFail()
+            const fresca = await DiningTable.query({ client: trx })
+              .where('id', mesa.id)
+              .forUpdate()
+              .firstOrFail()
             if (fresca.needsRelease) throw new OrderError(`La mesa ${mesa.name} está por liberar`)
           }
         }
@@ -426,9 +471,11 @@ export default class SalonService {
               service: servicio,
               status: 'abierta',
               accountStatus: 'abierta',
-              customerName: servicio === 'comedor' ? `Mesa ${mesa!.name}` : datos.customerName?.trim() || alias,
+              customerName:
+                servicio === 'comedor' ? `Mesa ${mesa!.name}` : datos.customerName?.trim() || alias,
               customerPhone: datos.customerPhone?.trim() || null,
-              deliveryMethod: servicio === 'delivery' ? 'envio' : servicio === 'comedor' ? 'mesa' : 'recojo',
+              deliveryMethod:
+                servicio === 'delivery' ? 'envio' : servicio === 'comedor' ? 'mesa' : 'recojo',
               deliveryAddress: datos.deliveryAddress?.trim() || null,
               tableLabel: alias,
               diningTableId: mesa?.id ?? null,
@@ -445,7 +492,9 @@ export default class SalonService {
           )
         }
 
-        const anteriores = await OrderRound.query({ client: trx }).where('order_id', order.id).count('* as n')
+        const anteriores = await OrderRound.query({ client: trx })
+          .where('order_id', order.id)
+          .count('* as n')
         const ronda = await OrderRound.create(
           {
             businessId: business.id,
@@ -482,6 +531,8 @@ export default class SalonService {
               note: l.item.note?.trim().slice(0, 255) || null,
               productionAreaId: area?.id ?? null,
               productionAreaName: area?.name ?? null,
+              kitchenStatus: 'pendiente',
+              sentToKitchenAt: DateTime.now(),
             },
             { client: trx }
           )
@@ -529,11 +580,11 @@ export default class SalonService {
   }
 
   /** Un ticket por área. Lo que no tiene área sale por la impresora de caja. */
-  private static async imprimirComandas(
+  static async imprimirComandas(
     trx: TransactionClientContract | null,
     business: Business,
     order: Order,
-    ronda: OrderRound,
+    ronda: OrderRound | null,
     items: OrderItem[],
     mesero: string,
     areas?: Map<number, ProductionArea | null>,
@@ -558,14 +609,16 @@ export default class SalonService {
           servicio: order.service,
           mesa: this.etiqueta(order),
           mesero,
-          ronda: ronda.number,
+          ronda: ronda?.number ?? null,
           cuenta: order.code,
           reimpresion,
           cliente: order.service === 'delivery' ? order.customerName : null,
           items: lista.map((i) => ({
             cantidad: i.quantity,
             nombre: i.productName,
-            opciones: (i.modifiers ?? []).map((m) => (m.quantity > 1 ? `${m.quantity}x ${m.optionName}` : m.optionName)),
+            opciones: (i.modifiers ?? []).map((m) =>
+              m.quantity > 1 ? `${m.quantity}x ${m.optionName}` : m.optionName
+            ),
             nota: i.note,
           })),
         },
@@ -588,12 +641,16 @@ export default class SalonService {
   }
 
   /** Área de cada plato: la suya, o la de su primera categoría que tenga una. */
-  private static async areasDe(business: Business, productos: Product[]) {
-    const areas = await ProductionArea.query().where('business_id', business.id).andWhere('is_active', true)
+  static async areasDe(business: Business, productos: Product[]) {
+    const areas = await ProductionArea.query()
+      .where('business_id', business.id)
+      .andWhere('is_active', true)
     const areaPorId = new Map(areas.map((a) => [a.id, a]))
     const resultado = new Map<number, ProductionArea | null>()
 
-    const sinPropia = productos.filter((p) => !p.productionAreaId || !areaPorId.has(p.productionAreaId))
+    const sinPropia = productos.filter(
+      (p) => !p.productionAreaId || !areaPorId.has(p.productionAreaId)
+    )
     const porCategoria = new Map<number, number>()
     if (sinPropia.length) {
       const links = await CategoryProduct.query()
@@ -605,12 +662,15 @@ export default class SalonService {
         .orderBy('id', 'asc')
       for (const l of links) {
         const a = l.category?.productionAreaId
-        if (a && areaPorId.has(a) && !porCategoria.has(l.productId)) porCategoria.set(l.productId, a)
+        if (a && areaPorId.has(a) && !porCategoria.has(l.productId))
+          porCategoria.set(l.productId, a)
       }
     }
     for (const p of productos) {
       const id =
-        p.productionAreaId && areaPorId.has(p.productionAreaId) ? p.productionAreaId : porCategoria.get(p.id)
+        p.productionAreaId && areaPorId.has(p.productionAreaId)
+          ? p.productionAreaId
+          : porCategoria.get(p.id)
       resultado.set(p.id, id ? (areaPorId.get(id) ?? null) : null)
     }
     return resultado
@@ -633,7 +693,12 @@ export default class SalonService {
   }
 
   private static async tieneItems(order: Order, trx: TransactionClientContract) {
-    const f = await trx.from('order_items').where('order_id', order.id).whereNull('voided_at').count('* as n').first()
+    const f = await trx
+      .from('order_items')
+      .where('order_id', order.id)
+      .whereNull('voided_at')
+      .count('* as n')
+      .first()
     return Number(f?.n ?? 0) > 0
   }
 
@@ -644,7 +709,12 @@ export default class SalonService {
    * equipo, o la serie por defecto) y la cuenta queda "impresa": ya no se le
    * agrega nada sin reabrirla. Reimprimir conserva el folio.
    */
-  static async imprimirCuenta(business: Business, actor: Actor, orderId: number, opciones: ConPin = {}) {
+  static async imprimirCuenta(
+    business: Business,
+    actor: Actor,
+    orderId: number,
+    opciones: ConPin = {}
+  ) {
     await PermissionService.exigir(business, actor, 'cuentas.imprimir', {
       pin: opciones.pin,
       contexto: `Imprimir cuenta ${orderId}`,
@@ -707,7 +777,9 @@ export default class SalonService {
     itemId: number,
     datos: { reason: string; quantity?: number } & ConPin
   ) {
-    const motivo = String(datos.reason ?? '').trim().slice(0, 160)
+    const motivo = String(datos.reason ?? '')
+      .trim()
+      .slice(0, 160)
     if (!motivo) throw new OrderError('Escribe el motivo de la anulación')
     const autorizo = await PermissionService.exigir(business, actor, 'cuentas.anular_plato', {
       pin: datos.pin,
@@ -743,7 +815,9 @@ export default class SalonService {
       // Lo anulado sale también del subtotal; si no, se vería como descuento.
       const pct = Number(anulado.discountPercentage ?? 0)
       const brutoAnulado =
-        pct > 0 && pct < 100 ? Number(anulado.lineTotal) / (1 - pct / 100) : Number(anulado.lineTotal)
+        pct > 0 && pct < 100
+          ? Number(anulado.lineTotal) / (1 - pct / 100)
+          : Number(anulado.lineTotal)
       order.subtotal = r2(Math.max(0, Number(order.subtotal) - brutoAnulado))
       await this.recalcular(order, trx)
 
@@ -773,13 +847,21 @@ export default class SalonService {
     if (cantidad >= item.quantity) return item
     const unit = Number(item.lineTotal) / item.quantity
     const nueva = await OrderItem.create(
-      { ...item.$attributes, id: undefined, quantity: cantidad, lineTotal: r2(unit * cantidad) } as any,
+      {
+        ...item.$attributes,
+        id: undefined,
+        quantity: cantidad,
+        lineTotal: r2(unit * cantidad),
+      } as any,
       { client: trx }
     )
     for (const m of item.modifiers ?? []) {
-      await OrderItemModifier.create({ ...m.$attributes, id: undefined, orderItemId: nueva.id } as any, {
-        client: trx,
-      })
+      await OrderItemModifier.create(
+        { ...m.$attributes, id: undefined, orderItemId: nueva.id } as any,
+        {
+          client: trx,
+        }
+      )
     }
     item.quantity -= cantidad
     item.lineTotal = r2(Number(item.lineTotal) - Number(nueva.lineTotal))
@@ -795,7 +877,9 @@ export default class SalonService {
     itemId: number,
     datos: { reason: string; quantity?: number } & ConPin
   ) {
-    const motivo = String(datos.reason ?? '').trim().slice(0, 160)
+    const motivo = String(datos.reason ?? '')
+      .trim()
+      .slice(0, 160)
     if (!motivo) throw new OrderError('Escribe el motivo de la cortesía')
     const autorizo = await PermissionService.exigir(business, actor, 'cobro.cortesia', {
       pin: datos.pin,
@@ -813,13 +897,17 @@ export default class SalonService {
       const order = await this.cuentaBloqueada(business, item.orderId, trx)
       this.exigirVisible(actor, order)
       this.exigirEditable(order)
-      const cantidad = Math.min(item.quantity, Math.max(1, Math.floor(Number(datos.quantity ?? item.quantity))))
+      const cantidad = Math.min(
+        item.quantity,
+        Math.max(1, Math.floor(Number(datos.quantity ?? item.quantity)))
+      )
       const regalo = await this.partir(item, cantidad, trx)
       regalo.isCourtesy = true
       regalo.unitPrice = 0
       regalo.lineTotal = 0
       regalo.discountPercentage = 100
-      regalo.promotionName = `Cortesía: ${motivo} (${autorizo ? `autorizó ${autorizo}` : actor.name})`.slice(0, 255)
+      regalo.promotionName =
+        `Cortesía: ${motivo} (${autorizo ? `autorizó ${autorizo}` : actor.name})`.slice(0, 255)
       regalo.useTransaction(trx)
       await regalo.save()
       await this.recalcular(order, trx)
@@ -843,7 +931,11 @@ export default class SalonService {
     )
   }
 
-  private static async sesionParaCobrar(business: Business, actor: Actor, trx: TransactionClientContract) {
+  private static async sesionParaCobrar(
+    business: Business,
+    actor: Actor,
+    trx: TransactionClientContract
+  ) {
     const abiertas = await trx
       .from('cash_sessions')
       .where('business_id', business.id)
@@ -854,7 +946,9 @@ export default class SalonService {
       if (s) return s
       throw new OrderError('La caja de este equipo está cerrada. Ábrela para cobrar.')
     }
-    const s = abiertas.find((x) => x.user_id === actor.userId) ?? (abiertas.length === 1 ? abiertas[0] : null)
+    const s =
+      abiertas.find((x) => x.user_id === actor.userId) ??
+      (abiertas.length === 1 ? abiertas[0] : null)
     if (!s) {
       throw new OrderError(
         abiertas.length
@@ -889,7 +983,8 @@ export default class SalonService {
     const pct = Math.min(Math.max(Number(datos.discountPercentage ?? 0), 0), 100)
     let autorizoDescuento: string | null = null
     if (pct > 0) {
-      if (!String(datos.discountReason ?? '').trim()) throw new OrderError('Escribe el motivo del descuento')
+      if (!String(datos.discountReason ?? '').trim())
+        throw new OrderError('Escribe el motivo del descuento')
       autorizoDescuento = await PermissionService.exigir(business, actor, 'cobro.descuento', {
         pin: datos.pin,
         valor: pct,
@@ -904,7 +999,8 @@ export default class SalonService {
       this.exigirAbierta(order)
 
       await this.recalcular(order, trx)
-      if (!(await this.tieneItems(order, trx))) throw new OrderError('La cuenta no tiene nada que cobrar')
+      if (!(await this.tieneItems(order, trx)))
+        throw new OrderError('La cuenta no tiene nada que cobrar')
 
       const sesion = await this.sesionParaCobrar(business, actor, trx)
 
@@ -912,7 +1008,9 @@ export default class SalonService {
       const total = r2(Number(order.total) - rebaja)
       const cobrado = r2((datos.payments ?? []).reduce((t, p) => t + Number(p.amount || 0), 0))
       if (cobrado < total - 0.009) {
-        throw new OrderError(`Falta cobrar: el total es ${total.toFixed(2)} y se registraron ${cobrado.toFixed(2)}`)
+        throw new OrderError(
+          `Falta cobrar: el total es ${total.toFixed(2)} y se registraron ${cobrado.toFixed(2)}`
+        )
       }
 
       // Lo que se recibe de más es vuelto, no pago.
@@ -965,7 +1063,10 @@ export default class SalonService {
 
       // La mesa: libre al cobrar, o "por liberar" si el negocio libera a mano.
       if (order.diningTableId) {
-        await trx.from('dining_tables').where('id', order.diningTableId).update({ needs_release: ajustes.liberarMesaManual })
+        await trx
+          .from('dining_tables')
+          .where('id', order.diningTableId)
+          .update({ needs_release: ajustes.liberarMesaManual })
       }
 
       return { vuelto: r2(cobrado - total) }
@@ -987,7 +1088,12 @@ export default class SalonService {
   }
 
   /** Reimprime la nota de venta de una cuenta cobrada. */
-  static async reimprimirNota(business: Business, actor: Actor, orderId: number, opciones: ConPin = {}) {
+  static async reimprimirNota(
+    business: Business,
+    actor: Actor,
+    orderId: number,
+    opciones: ConPin = {}
+  ) {
     await PermissionService.exigir(business, actor, 'cobro.cobrar', {
       pin: opciones.pin,
       contexto: `Reimprimir nota de venta ${orderId}`,
@@ -998,21 +1104,48 @@ export default class SalonService {
       kind: 'nota_venta',
       printerId: null,
       orderId,
-      payload: { ...this.ticketBase(business, datos), mesero: datos.mesero, cajero: actor.name, copia: true },
+      payload: {
+        ...this.ticketBase(business, datos),
+        mesero: datos.mesero,
+        cajero: actor.name,
+        copia: true,
+      },
     })
     return { ok: true }
   }
 
   /** Reimprime la comanda de una ronda (por ejemplo, si la impresora falló). */
-  static async reimprimirComanda(business: Business, actor: Actor, roundId: number, opciones: ConPin = {}) {
-    await PermissionService.exigir(business, actor, 'cuentas.reimprimir_comanda', { pin: opciones.pin })
-    const ronda = await OrderRound.query().where('business_id', business.id).andWhere('id', roundId).first()
+  static async reimprimirComanda(
+    business: Business,
+    actor: Actor,
+    roundId: number,
+    opciones: ConPin = {}
+  ) {
+    await PermissionService.exigir(business, actor, 'cuentas.reimprimir_comanda', {
+      pin: opciones.pin,
+    })
+    const ronda = await OrderRound.query()
+      .where('business_id', business.id)
+      .andWhere('id', roundId)
+      .first()
     if (!ronda) throw new OrderError('Ronda no encontrada')
     const order = await Order.findOrFail(ronda.orderId)
     this.exigirVisible(actor, order)
-    const items = await OrderItem.query().where('order_round_id', ronda.id).whereNull('voided_at').preload('modifiers')
+    const items = await OrderItem.query()
+      .where('order_round_id', ronda.id)
+      .whereNull('voided_at')
+      .preload('modifiers')
     if (!items.length) throw new OrderError('Esa ronda no tiene platos vigentes')
-    await this.imprimirComandas(null, business, order, ronda, items, ronda.userName ?? actor.name, undefined, true)
+    await this.imprimirComandas(
+      null,
+      business,
+      order,
+      ronda,
+      items,
+      ronda.userName ?? actor.name,
+      undefined,
+      true
+    )
     return { ok: true }
   }
 
@@ -1024,7 +1157,9 @@ export default class SalonService {
     reason: string,
     opciones: ConPin = {}
   ) {
-    const motivo = String(reason ?? '').trim().slice(0, 160)
+    const motivo = String(reason ?? '')
+      .trim()
+      .slice(0, 160)
     if (!motivo) throw new OrderError('Escribe el motivo')
     const autorizo = await PermissionService.exigir(business, actor, 'cuentas.cancelar', {
       pin: opciones.pin,
@@ -1044,7 +1179,8 @@ export default class SalonService {
 
       // Cada área se entera de lo que ya no debe preparar.
       const porArea = new Map<number | null, OrderItem[]>()
-      for (const i of vigentes) porArea.set(i.productionAreaId, [...(porArea.get(i.productionAreaId) ?? []), i])
+      for (const i of vigentes)
+        porArea.set(i.productionAreaId, [...(porArea.get(i.productionAreaId) ?? []), i])
       for (const [areaId, lista] of porArea) {
         const area = areaId ? await ProductionArea.find(areaId, { client: trx }) : null
         await this.encolar(trx, business, {
@@ -1058,7 +1194,12 @@ export default class SalonService {
             mesero: actor.name,
             cuenta: order.code,
             motivo: `CUENTA CANCELADA: ${motivoFinal}`,
-            items: lista.map((i) => ({ cantidad: i.quantity, nombre: i.productName, opciones: [], nota: null })),
+            items: lista.map((i) => ({
+              cantidad: i.quantity,
+              nombre: i.productName,
+              opciones: [],
+              nota: null,
+            })),
           },
         })
       }
@@ -1076,14 +1217,22 @@ export default class SalonService {
           canceladoPor: actor.name,
           motivo: motivoFinal,
           total: Number(order.total),
-          lineas: vigentes.map((i) => ({ cantidad: i.quantity, nombre: i.productName, total: Number(i.lineTotal) })),
+          lineas: vigentes.map((i) => ({
+            cantidad: i.quantity,
+            nombre: i.productName,
+            total: Number(i.lineTotal),
+          })),
         },
       })
 
       await OrderItem.query({ client: trx })
         .where('order_id', order.id)
         .whereNull('voided_at')
-        .update({ voided_at: DateTime.now().toSQL(), void_reason: motivoFinal, voided_by_user_id: actor.userId })
+        .update({
+          voided_at: DateTime.now().toSQL(),
+          void_reason: motivoFinal,
+          voided_by_user_id: actor.userId,
+        })
 
       order.status = 'cancelado'
       order.accountStatus = null
@@ -1098,7 +1247,13 @@ export default class SalonService {
   // ------------------------------------------------------------------ mesas
 
   /** Pasa la cuenta a otra mesa libre (o le asigna una si estaba sin mesa). */
-  static async moverMesa(business: Business, actor: Actor, orderId: number, tableId: number, opciones: ConPin = {}) {
+  static async moverMesa(
+    business: Business,
+    actor: Actor,
+    orderId: number,
+    tableId: number,
+    opciones: ConPin = {}
+  ) {
     await PermissionService.exigir(business, actor, 'cuentas.mover_mesa', {
       pin: opciones.pin,
       contexto: `Mover cuenta ${orderId}`,
@@ -1139,7 +1294,12 @@ export default class SalonService {
    *  - con la cuenta impresa → la cuenta sigue abierta sin mesa (el cliente
    *    pasa a pagar a caja) y la mesa queda libre para otros.
    */
-  static async liberarMesa(business: Business, actor: Actor, tableId: number, opciones: ConPin = {}) {
+  static async liberarMesa(
+    business: Business,
+    actor: Actor,
+    tableId: number,
+    opciones: ConPin = {}
+  ) {
     await PermissionService.exigir(business, actor, 'cuentas.liberar_mesa', {
       pin: opciones.pin,
       contexto: `Liberar mesa ${tableId}`,
@@ -1159,9 +1319,15 @@ export default class SalonService {
       if (abierta) {
         this.exigirVisible(actor, abierta)
         if (abierta.accountStatus !== 'impresa') {
-          throw new OrderError('Primero imprime la cuenta: así queda con folio para cobrarla en caja')
+          throw new OrderError(
+            'Primero imprime la cuenta: así queda con folio para cobrarla en caja'
+          )
         }
-        abierta.merge({ diningTableId: null, tableLabel: `Mesa ${mesa.name}`, tableReleasedAt: DateTime.now() })
+        abierta.merge({
+          diningTableId: null,
+          tableLabel: `Mesa ${mesa.name}`,
+          tableReleasedAt: DateTime.now(),
+        })
         abierta.useTransaction(trx)
         await abierta.save()
       }
@@ -1174,12 +1340,16 @@ export default class SalonService {
 
   // --------------------------------------------------------------- impresión
 
-  private static ticketBase(business: Business, c: Awaited<ReturnType<typeof SalonService.cuenta>>) {
+  private static ticketBase(
+    business: Business,
+    c: Awaited<ReturnType<typeof SalonService.cuenta>>
+  ) {
     // Se agrupan las líneas iguales para que el ticket del cliente sea corto.
     const lineas = new Map<string, { cantidad: number; nombre: string; total: number }>()
     for (const i of c.items) {
       if (i.voided) continue
-      const nombre = [i.name, ...i.modifiers.map((m) => m.name)].join(' + ') + (i.courtesy ? ' (cortesia)' : '')
+      const nombre =
+        [i.name, ...i.modifiers.map((m) => m.name)].join(' + ') + (i.courtesy ? ' (cortesia)' : '')
       const k = `${nombre}|${i.unitPrice}`
       const prev = lineas.get(k)
       lineas.set(k, {
@@ -1218,7 +1388,12 @@ export default class SalonService {
   static async encolar(
     trx: TransactionClientContract | null,
     business: Business,
-    datos: { kind: PrintKind; printerId: number | null; orderId: number | null; payload: Record<string, any> }
+    datos: {
+      kind: PrintKind
+      printerId: number | null
+      orderId: number | null
+      payload: Record<string, any>
+    }
   ) {
     const ajustes = await PosSettingsService.leer(business)
     const t = ajustes.ticket
@@ -1240,7 +1415,11 @@ export default class SalonService {
         printerId: datos.printerId,
         orderId: datos.orderId,
         kind: datos.kind,
-        payload: { ...datos.payload, estilo, hora: DateTime.now().setZone('America/Lima').toFormat('dd/LL HH:mm') },
+        payload: {
+          ...datos.payload,
+          estilo,
+          hora: DateTime.now().setZone('America/Lima').toFormat('dd/LL HH:mm'),
+        },
         status: 'pendiente',
         attempts: 0,
       },
@@ -1252,7 +1431,10 @@ export default class SalonService {
     const limpios = [...new Set(ids.filter((v): v is number => !!v))]
     const mapa = new Map<number, string>()
     if (!limpios.length) return mapa
-    const staff = await db.from('business_staff').whereIn('user_id', limpios).select('user_id', 'name')
+    const staff = await db
+      .from('business_staff')
+      .whereIn('user_id', limpios)
+      .select('user_id', 'name')
     for (const s of staff) mapa.set(s.user_id, s.name)
     const users = await db.from('users').whereIn('id', limpios).select('id', 'name')
     for (const u of users) if (!mapa.has(u.id)) mapa.set(u.id, u.name)

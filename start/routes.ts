@@ -139,6 +139,8 @@ router
 router.post('/api/pos/pair', [PosDeviceController, 'pair'])
 router.post('/api/pos/device', [PosDeviceController, 'info'])
 router.post('/api/pos/login', [PosDeviceController, 'login'])
+router.post('/api/pos/monitor', [PosDeviceController, 'monitor'])
+router.post('/api/pos/monitor/items', [PosDeviceController, 'monitorItems'])
 
 /*
 | 1d. Cuentas de cliente (global, no depende de una tienda)
@@ -402,6 +404,10 @@ router
     router.post('/salon/rounds/:roundId/reprint', [SalonController, 'reprintRound'])
     router.post('/salon/items/:itemId/void', [SalonController, 'voidItem'])
     router.post('/salon/items/:itemId/courtesy', [SalonController, 'courtesy'])
+    router.post('/salon/items/serve', [SalonController, 'serve'])
+    // Monitor de producción
+    router.get('/salon/monitor', [SalonController, 'monitor'])
+    router.post('/salon/monitor/items', [SalonController, 'monitorItems'])
     // Caja: apertura, movimientos, lo de los meseros, cortes X / Z y corte global
     router.get('/salon/cash', [SalonController, 'cashState'])
     router.post('/salon/cash/open', [SalonController, 'cashOpen'])

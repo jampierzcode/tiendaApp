@@ -46,7 +46,9 @@ export default class StaffService {
   }
 
   static async crear(business: Business, datos: { name: string; pin: string; role?: string }) {
-    const nombre = String(datos.name ?? '').trim().slice(0, 80)
+    const nombre = String(datos.name ?? '')
+      .trim()
+      .slice(0, 80)
     if (!nombre) throw new OrderError('Escribe el nombre')
     const pin = this.validarPin(datos.pin)
     await this.pinLibre(business, pin)
@@ -86,7 +88,10 @@ export default class StaffService {
     id: number,
     datos: { name?: string; pin?: string; role?: string; isActive?: boolean }
   ) {
-    const staff = await BusinessStaff.query().where('business_id', business.id).andWhere('id', id).firstOrFail()
+    const staff = await BusinessStaff.query()
+      .where('business_id', business.id)
+      .andWhere('id', id)
+      .firstOrFail()
     if (datos.name !== undefined) {
       const nombre = String(datos.name).trim().slice(0, 80)
       if (!nombre) throw new OrderError('Escribe el nombre')
@@ -109,7 +114,10 @@ export default class StaffService {
   }
 
   static async eliminar(business: Business, id: number) {
-    const staff = await BusinessStaff.query().where('business_id', business.id).andWhere('id', id).firstOrFail()
+    const staff = await BusinessStaff.query()
+      .where('business_id', business.id)
+      .andWhere('id', id)
+      .firstOrFail()
     await User.query().where('id', staff.userId).delete()
   }
 
@@ -129,25 +137,40 @@ export default class StaffService {
     const limpio = String(codigo ?? '').replace(/\D/g, '')
     const clave = `vinc:${limpio.slice(0, 2)}`
     PermissionService.frenarFallos(clave)
-    const business = limpio.length === 6 ? await BusinessModel.findBy('pos_pairing_code', limpio) : null
+    const business =
+      limpio.length === 6 ? await BusinessModel.findBy('pos_pairing_code', limpio) : null
     if (!business || business.status !== 'activo') {
       PermissionService.registrarFallo(clave)
       throw new OrderError('Código incorrecto. Pídelo al dueño en Infraestructura → Equipos.')
     }
     const token = randomBytes(32).toString('hex')
-    const device = await db.table('pos_devices').insert({
-      business_id: business.id,
-      name: String(nombre ?? '').trim().slice(0, 60) || 'Equipo',
-      token_hash: sha(token),
-      created_at: new Date(),
-      updated_at: new Date(),
-    }).returning('id')
-    return { deviceToken: token, deviceId: device[0].id ?? device[0], negocio: { uuid: business.uuid, name: business.name } }
+    const device = await db
+      .table('pos_devices')
+      .insert({
+        business_id: business.id,
+        name:
+          String(nombre ?? '')
+            .trim()
+            .slice(0, 60) || 'Equipo',
+        token_hash: sha(token),
+        created_at: new Date(),
+        updated_at: new Date(),
+      })
+      .returning('id')
+    return {
+      deviceToken: token,
+      deviceId: device[0].id ?? device[0],
+      negocio: { uuid: business.uuid, name: business.name },
+    }
   }
 
   static async equipo(deviceToken: string) {
     if (!deviceToken) return null
-    const d = await db.from('pos_devices').where('token_hash', sha(String(deviceToken))).whereNull('revoked_at').first()
+    const d = await db
+      .from('pos_devices')
+      .where('token_hash', sha(String(deviceToken)))
+      .whereNull('revoked_at')
+      .first()
     return d ?? null
   }
 
@@ -157,13 +180,18 @@ export default class StaffService {
     if (!d) return null
     const b = await BusinessModel.find(d.business_id)
     if (!b || b.status !== 'activo') return null
-    return { equipo: d.name, negocio: { uuid: b.uuid, name: b.name } }
+    return {
+      equipo: d.name,
+      modo: d.mode as 'pdv' | 'monitor',
+      negocio: { uuid: b.uuid, name: b.name },
+    }
   }
 
   /** Entrada solo con PIN, desde un equipo vinculado. */
   static async entrar(deviceToken: string, pin: string) {
     const d = await this.equipo(deviceToken)
     if (!d) throw new OrderError('Este equipo ya no está vinculado. Vincúlalo otra vez.')
+    if (d.mode === 'monitor') throw new OrderError('Este equipo es un monitor de producción')
     const clave = `pin:${d.business_id}:${d.id}`
     PermissionService.frenarFallos(clave)
 
@@ -183,42 +211,94 @@ export default class StaffService {
     await db.from('pos_devices').where('id', d.id).update({ last_seen_at: new Date() })
     const user = await User.findOrFail(staff.userId)
     const token = await User.accessTokens.create(user, ['*'], { expiresIn: '12 hours' })
-    await db.from('auth_access_tokens').where('id', String(token.identifier)).update({ pos_device_id: d.id })
+    await db
+      .from('auth_access_tokens')
+      .where('id', String(token.identifier))
+      .update({ pos_device_id: d.id })
     const b = await BusinessModel.findOrFail(d.business_id)
     return { token, staff, negocio: { uuid: b.uuid, name: b.name } }
   }
 
   static async equipos(business: Business) {
-    return db
+    const filas = await db
       .from('pos_devices')
       .where('business_id', business.id)
       .whereNull('revoked_at')
       .orderBy('id', 'asc')
-      .select('id', 'name', 'cash_register_id as cashRegisterId', 'last_seen_at as lastSeenAt', 'created_at as createdAt')
+      .select('id', 'name', 'mode', 'area_ids', 'cash_register_id', 'last_seen_at', 'created_at')
+    return filas.map((d) => ({
+      id: d.id,
+      name: d.name,
+      mode: d.mode,
+      areaIds: StaffService.areasDeEquipo(d),
+      cashRegisterId: d.cash_register_id,
+      lastSeenAt: d.last_seen_at,
+      createdAt: d.created_at,
+    }))
   }
 
-  static async editarEquipo(business: Business, id: number, datos: { name?: string; cashRegisterId?: number | null }) {
+  static areasDeEquipo(d: { area_ids?: string | null }): number[] {
+    try {
+      const v = JSON.parse(d.area_ids ?? '[]')
+      return Array.isArray(v) ? v.map(Number).filter(Boolean) : []
+    } catch {
+      return []
+    }
+  }
+
+  static async editarEquipo(
+    business: Business,
+    id: number,
+    datos: { name?: string; cashRegisterId?: number | null; mode?: string; areaIds?: number[] }
+  ) {
     const cambios: Record<string, unknown> = { updated_at: new Date() }
     if (datos.name !== undefined) cambios.name = String(datos.name).trim().slice(0, 60) || 'Equipo'
+    if (datos.mode !== undefined) cambios.mode = datos.mode === 'monitor' ? 'monitor' : 'pdv'
+    if (datos.areaIds !== undefined) {
+      const filas = await db.from('production_areas').where('business_id', business.id).select('id')
+      const validas = filas.map((a) => a.id)
+      cambios.area_ids = JSON.stringify(
+        (datos.areaIds ?? []).map(Number).filter((a) => validas.includes(a))
+      )
+    }
     if (datos.cashRegisterId !== undefined) {
       const id2 = Number(datos.cashRegisterId) || null
       if (id2) {
-        const caja = await db.from('cash_registers').where('business_id', business.id).andWhere('id', id2).first()
+        const caja = await db
+          .from('cash_registers')
+          .where('business_id', business.id)
+          .andWhere('id', id2)
+          .first()
         if (!caja) throw new OrderError('Caja no válida')
       }
       cambios.cash_register_id = id2
     }
-    await db.from('pos_devices').where('business_id', business.id).andWhere('id', id).update(cambios)
+    await db
+      .from('pos_devices')
+      .where('business_id', business.id)
+      .andWhere('id', id)
+      .update(cambios)
+    // Un equipo que pasa a monitor no debe tener sesiones de personal abiertas.
+    if (cambios.mode === 'monitor')
+      await db.from('auth_access_tokens').where('pos_device_id', id).delete()
   }
 
   static async revocarEquipo(business: Business, id: number) {
-    await db.from('pos_devices').where('business_id', business.id).andWhere('id', id).update({ revoked_at: new Date() })
+    await db
+      .from('pos_devices')
+      .where('business_id', business.id)
+      .andWhere('id', id)
+      .update({ revoked_at: new Date() })
     await db.from('auth_access_tokens').where('pos_device_id', id).delete()
   }
 
   /** Para el lado del servidor: equipo del token con el que entró el personal. */
   static async equipoDeToken(tokenId: number | string | bigint) {
-    const fila = await db.from('auth_access_tokens').where('id', String(tokenId)).select('pos_device_id').first()
+    const fila = await db
+      .from('auth_access_tokens')
+      .where('id', String(tokenId))
+      .select('pos_device_id')
+      .first()
     if (!fila?.pos_device_id) return null
     return db.from('pos_devices').where('id', fila.pos_device_id).whereNull('revoked_at').first()
   }

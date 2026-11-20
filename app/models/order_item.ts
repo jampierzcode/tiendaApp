@@ -79,6 +79,22 @@ export default class OrderItem extends BaseModel {
   @column()
   declare isCourtesy: boolean
 
+  /** Estado en cocina: pendiente, preparando, listo, servido (null = no pasa por cocina). */
+  @column()
+  declare kitchenStatus: 'pendiente' | 'preparando' | 'listo' | 'servido' | null
+
+  @column.dateTime()
+  declare sentToKitchenAt: DateTime | null
+
+  @column.dateTime()
+  declare startedAt: DateTime | null
+
+  @column.dateTime()
+  declare readyAt: DateTime | null
+
+  @column.dateTime()
+  declare servedAt: DateTime | null
+
   @column()
   declare voidedByUserId: number | null
 

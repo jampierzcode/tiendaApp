@@ -10,8 +10,14 @@ import CashService from '#services/cash_service'
 import FolioService from '#services/folio_service'
 import { OrderError } from '#services/order_service'
 import PermissionService, { AutorizacionRequerida, type Actor } from '#services/permission_service'
-import PosSettingsService, { PERMISOS, ROLES_POS, type RolPos } from '#services/pos_settings_service'
+import PosSettingsService, {
+  PERMISOS,
+  ROLES_POS,
+  type RolPos,
+} from '#services/pos_settings_service'
 import SalonService from '#services/salon_service'
+import KitchenService, { type EstadoCocina } from '#services/kitchen_service'
+import Business from '#models/business'
 import StaffService from '#services/staff_service'
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
@@ -25,7 +31,9 @@ import { DateTime } from 'luxon'
 export default class SalonController {
   private async actor(ctx: HttpContext): Promise<Actor> {
     if (ctx.staff) {
-      const equipo = await StaffService.equipoDeToken(String(ctx.auth.user!.currentAccessToken.identifier))
+      const equipo = await StaffService.equipoDeToken(
+        String(ctx.auth.user!.currentAccessToken.identifier)
+      )
       return {
         userId: ctx.staff.userId,
         name: ctx.staff.name,
@@ -89,7 +97,11 @@ export default class SalonController {
         servicios: ajustes.servicios,
         inactividadSegundos: ajustes.inactividadSegundos,
         liberarMesaManual: ajustes.liberarMesaManual,
-        negocio: { name: ctx.business.name, uuid: ctx.business.uuid, simbolo: ctx.business.currencySymbol || 'S/' },
+        negocio: {
+          name: ctx.business.name,
+          uuid: ctx.business.uuid,
+          simbolo: ctx.business.currencySymbol || 'S/',
+        },
       }
     })
   }
@@ -138,7 +150,9 @@ export default class SalonController {
   }
 
   async reopen(ctx: HttpContext) {
-    return this.manejar(ctx, (a) => SalonService.reabrir(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) }))
+    return this.manejar(ctx, (a) =>
+      SalonService.reabrir(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) })
+    )
   }
 
   async voidItem(ctx: HttpContext) {
@@ -181,29 +195,73 @@ export default class SalonController {
 
   async reprintRound(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
-      SalonService.reimprimirComanda(ctx.business, a, Number(ctx.params.roundId), { pin: this.pin(ctx) })
+      SalonService.reimprimirComanda(ctx.business, a, Number(ctx.params.roundId), {
+        pin: this.pin(ctx),
+      })
     )
   }
 
   async cancel(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
-      SalonService.cancelarCuenta(ctx.business, a, Number(ctx.params.id), ctx.request.input('reason'), {
-        pin: this.pin(ctx),
-      })
+      SalonService.cancelarCuenta(
+        ctx.business,
+        a,
+        Number(ctx.params.id),
+        ctx.request.input('reason'),
+        {
+          pin: this.pin(ctx),
+        }
+      )
     )
   }
 
   async move(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
-      SalonService.moverMesa(ctx.business, a, Number(ctx.params.id), Number(ctx.request.input('tableId')), {
-        pin: this.pin(ctx),
-      })
+      SalonService.moverMesa(
+        ctx.business,
+        a,
+        Number(ctx.params.id),
+        Number(ctx.request.input('tableId')),
+        {
+          pin: this.pin(ctx),
+        }
+      )
     )
   }
 
   async releaseTable(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
       SalonService.liberarMesa(ctx.business, a, Number(ctx.params.id), { pin: this.pin(ctx) })
+    )
+  }
+
+  // -------------------------------------------------------------- producción
+
+  /** Monitor de producción desde el panel o un equipo con sesión (todas o algunas áreas). */
+  async monitor(ctx: HttpContext) {
+    const areas = String(ctx.request.input('areas', '') ?? '')
+      .split(',')
+      .map(Number)
+      .filter(Boolean)
+    return this.manejar(ctx, () =>
+      KitchenService.tickets(ctx.business, areas.length ? areas : null)
+    )
+  }
+
+  async monitorItems(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      KitchenService.cambiar(
+        ctx.business,
+        ctx.request.input('ids') ?? [],
+        ctx.request.input('estado') as EstadoCocina
+      )
+    )
+  }
+
+  /** El mesero marca como servidos los platos que ya llevó a la mesa. */
+  async serve(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      KitchenService.servir(ctx.business, ctx.request.input('ids') ?? [])
     )
   }
 
@@ -236,7 +294,13 @@ export default class SalonController {
 
   async cashX(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
-      CashService.corteX(ctx.business, a, Number(ctx.params.id), ctx.request.input('print') !== false, this.pin(ctx))
+      CashService.corteX(
+        ctx.business,
+        a,
+        Number(ctx.params.id),
+        ctx.request.input('print') !== false,
+        this.pin(ctx)
+      )
     )
   }
 
@@ -262,7 +326,10 @@ export default class SalonController {
 
   async cashClose(ctx: HttpContext) {
     return this.manejar(ctx, (a) =>
-      CashService.cierreGlobal(ctx.business, a, { force: ctx.request.input('force') === true, pin: this.pin(ctx) })
+      CashService.cierreGlobal(ctx.business, a, {
+        force: ctx.request.input('force') === true,
+        pin: this.pin(ctx),
+      })
     )
   }
 
@@ -274,7 +341,9 @@ export default class SalonController {
   }
 
   async cashReprint(ctx: HttpContext) {
-    return this.manejar(ctx, (a) => CashService.reimprimirGlobal(ctx.business, a, Number(ctx.params.id)))
+    return this.manejar(ctx, (a) =>
+      CashService.reimprimirGlobal(ctx.business, a, Number(ctx.params.id))
+    )
   }
 
   // ----------------------------------------------------- central de impresión
@@ -310,7 +379,10 @@ export default class SalonController {
 
   async printHistory(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    const jobs = await PrintJob.query().where('business_id', ctx.business.id).orderBy('id', 'desc').limit(40)
+    const jobs = await PrintJob.query()
+      .where('business_id', ctx.business.id)
+      .orderBy('id', 'desc')
+      .limit(40)
     return { status: 'success', data: jobs }
   }
 
@@ -365,27 +437,47 @@ export default class SalonController {
     if (!this.soloDueno(ctx)) return
     const b = ctx.business.id
     await FolioService.seriePorDefecto(ctx.business)
-    const [printers, areas, tables, staff, categories, products, registers, series, devices, ajustes] =
-      await Promise.all([
-        Printer.query().where('business_id', b).orderBy('id', 'asc'),
-        ProductionArea.query().where('business_id', b).orderBy('sort_order', 'asc').orderBy('id', 'asc'),
-        DiningTable.query().where('business_id', b).orderBy('sort_order', 'asc').orderBy('id', 'asc'),
-        StaffService.listar(ctx.business),
-        Category.query().where('business_id', b).orderBy('sort_order', 'asc').select('id', 'name', 'production_area_id'),
-        Product.query()
+    const [
+      printers,
+      areas,
+      tables,
+      staff,
+      categories,
+      products,
+      registers,
+      series,
+      devices,
+      ajustes,
+    ] = await Promise.all([
+      Printer.query().where('business_id', b).orderBy('id', 'asc'),
+      ProductionArea.query()
+        .where('business_id', b)
+        .orderBy('sort_order', 'asc')
+        .orderBy('id', 'asc'),
+      DiningTable.query().where('business_id', b).orderBy('sort_order', 'asc').orderBy('id', 'asc'),
+      StaffService.listar(ctx.business),
+      Category.query()
+        .where('business_id', b)
+        .orderBy('sort_order', 'asc')
+        .select('id', 'name', 'production_area_id'),
+      Product.query()
+        .where('business_id', b)
+        .andWhere('status', 'activo')
+        .preload('categoryLinks')
+        .orderBy('sort_order', 'asc')
+        .orderBy('name', 'asc')
+        .select('id', 'name', 'production_area_id'),
+      CashService.cajas(ctx.business).then(() =>
+        db
+          .from('cash_registers')
           .where('business_id', b)
-          .andWhere('status', 'activo')
-          .preload('categoryLinks')
-          .orderBy('sort_order', 'asc')
-          .orderBy('name', 'asc')
-          .select('id', 'name', 'production_area_id'),
-        CashService.cajas(ctx.business).then(() =>
-          db.from('cash_registers').where('business_id', b).andWhere('is_active', true).orderBy('id', 'asc')
-        ),
-        db.from('folio_series').where('business_id', b).orderBy('id', 'asc'),
-        StaffService.equipos(ctx.business),
-        PosSettingsService.leer(ctx.business),
-      ])
+          .andWhere('is_active', true)
+          .orderBy('id', 'asc')
+      ),
+      db.from('folio_series').where('business_id', b).orderBy('id', 'asc'),
+      StaffService.equipos(ctx.business),
+      PosSettingsService.leer(ctx.business),
+    ])
     return {
       status: 'success',
       data: {
@@ -393,14 +485,22 @@ export default class SalonController {
         areas,
         tables,
         staff,
-        categories: categories.map((c) => ({ id: c.id, name: c.name, productionAreaId: c.productionAreaId })),
+        categories: categories.map((c) => ({
+          id: c.id,
+          name: c.name,
+          productionAreaId: c.productionAreaId,
+        })),
         products: products.map((p) => ({
           id: p.id,
           name: p.name,
           productionAreaId: p.productionAreaId,
           categoryIds: p.categoryLinks.map((l) => l.categoryId),
         })),
-        registers: registers.map((r) => ({ id: r.id, name: r.name, folioSeriesId: r.folio_series_id })),
+        registers: registers.map((r) => ({
+          id: r.id,
+          name: r.name,
+          folioSeriesId: r.folio_series_id,
+        })),
         series: series.map((s) => ({
           id: s.id,
           code: s.code,
@@ -422,20 +522,33 @@ export default class SalonController {
     return this.manejar(ctx, () =>
       PosSettingsService.guardar(
         ctx.business,
-        ctx.request.only(['permisos', 'inactividadSegundos', 'liberarMesaManual', 'servicios', 'ticket'])
+        ctx.request.only([
+          'permisos',
+          'inactividadSegundos',
+          'liberarMesaManual',
+          'servicios',
+          'ticket',
+        ])
       )
     )
   }
 
   async rotatePairing(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    return { status: 'success', data: { pairingCode: await StaffService.codigoVinculacion(ctx.business, true) } }
+    return {
+      status: 'success',
+      data: { pairingCode: await StaffService.codigoVinculacion(ctx.business, true) },
+    }
   }
 
   async saveDevice(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
     return this.manejar(ctx, () =>
-      StaffService.editarEquipo(ctx.business, Number(ctx.params.id), ctx.request.only(['name', 'cashRegisterId']))
+      StaffService.editarEquipo(
+        ctx.business,
+        Number(ctx.params.id),
+        ctx.request.only(['name', 'cashRegisterId', 'mode', 'areaIds'])
+      )
     )
   }
 
@@ -450,16 +563,25 @@ export default class SalonController {
     return this.manejar(ctx, async () => {
       const id = Number(ctx.params.id) || null
       const r = id
-        ? await CashRegister.query().where('business_id', ctx.business.id).andWhere('id', id).firstOrFail()
+        ? await CashRegister.query()
+            .where('business_id', ctx.business.id)
+            .andWhere('id', id)
+            .firstOrFail()
         : new CashRegister()
-      const name = String(ctx.request.input('name', r.name ?? '')).trim().slice(0, 60)
+      const name = String(ctx.request.input('name', r.name ?? ''))
+        .trim()
+        .slice(0, 60)
       if (!name) throw new OrderError('Escribe el nombre de la caja')
       r.merge({ businessId: ctx.business.id, name, isActive: true })
       await r.save()
       if (ctx.request.input('folioSeriesId') !== undefined) {
         const s = Number(ctx.request.input('folioSeriesId')) || null
         if (s) {
-          const existe = await db.from('folio_series').where('business_id', ctx.business.id).andWhere('id', s).first()
+          const existe = await db
+            .from('folio_series')
+            .where('business_id', ctx.business.id)
+            .andWhere('id', s)
+            .first()
           if (!existe) throw new OrderError('Serie no válida')
         }
         await db.from('cash_registers').where('id', r.id).update({ folio_series_id: s })
@@ -489,11 +611,21 @@ export default class SalonController {
     if (!this.soloDueno(ctx)) return
     return this.manejar(ctx, async () => {
       const id = Number(ctx.params.id) || null
-      const name = ctx.request.input('name') === undefined ? undefined : String(ctx.request.input('name') ?? '').trim().slice(0, 60) || null
+      const name =
+        ctx.request.input('name') === undefined
+          ? undefined
+          : String(ctx.request.input('name') ?? '')
+              .trim()
+              .slice(0, 60) || null
       if (!id) {
         const code = String(ctx.request.input('code', '')).trim().toUpperCase().slice(0, 16)
-        if (!/^[A-Z0-9-]{1,16}$/.test(code)) throw new OrderError('Código de serie: letras y números, sin espacios')
-        const existe = await db.from('folio_series').where('business_id', ctx.business.id).andWhere('code', code).first()
+        if (!/^[A-Z0-9-]{1,16}$/.test(code))
+          throw new OrderError('Código de serie: letras y números, sin espacios')
+        const existe = await db
+          .from('folio_series')
+          .where('business_id', ctx.business.id)
+          .andWhere('code', code)
+          .first()
         if (existe) throw new OrderError('Ya existe esa serie')
         const inicio = Math.max(1, Math.floor(Number(ctx.request.input('nextNumber', 1)) || 1))
         await db.table('folio_series').insert({
@@ -507,11 +639,16 @@ export default class SalonController {
         })
         return { ok: true }
       }
-      const actual = await db.from('folio_series').where('id', id).andWhere('business_id', ctx.business.id).first()
+      const actual = await db
+        .from('folio_series')
+        .where('id', id)
+        .andWhere('business_id', ctx.business.id)
+        .first()
       if (!actual) throw new OrderError('Serie no encontrada')
       const cambios: Record<string, unknown> = { updated_at: new Date() }
       if (name !== undefined) cambios.name = name
-      if (ctx.request.input('isActive') !== undefined) cambios.is_active = Boolean(ctx.request.input('isActive'))
+      if (ctx.request.input('isActive') !== undefined)
+        cambios.is_active = Boolean(ctx.request.input('isActive'))
       // El siguiente número solo puede subir: bajarlo repetiría folios ya usados.
       if (ctx.request.input('nextNumber') !== undefined) {
         const nuevo = Math.floor(Number(ctx.request.input('nextNumber')))
@@ -519,7 +656,10 @@ export default class SalonController {
           throw new OrderError(`El siguiente folio no puede ser menor a ${actual.next_number}`)
         }
         // Se sube dentro del mismo UPDATE con GREATEST para no pisar un folio que se tomó justo ahora.
-        await db.rawQuery('UPDATE folio_series SET next_number = GREATEST(next_number, ?) WHERE id = ?', [nuevo, id])
+        await db.rawQuery(
+          'UPDATE folio_series SET next_number = GREATEST(next_number, ?) WHERE id = ?',
+          [nuevo, id]
+        )
       }
       await db.from('folio_series').where('id', id).update(cambios)
       return { ok: true }
@@ -542,9 +682,14 @@ export default class SalonController {
     return this.manejar(ctx, async () => {
       const id = Number(ctx.params.id) || null
       const p = id
-        ? await Printer.query().where('business_id', ctx.business.id).andWhere('id', id).firstOrFail()
+        ? await Printer.query()
+            .where('business_id', ctx.business.id)
+            .andWhere('id', id)
+            .firstOrFail()
         : new Printer()
-      const name = String(ctx.request.input('name', p.name ?? '')).trim().slice(0, 60)
+      const name = String(ctx.request.input('name', p.name ?? ''))
+        .trim()
+        .slice(0, 60)
       if (!name) throw new OrderError('Escribe un nombre')
       p.merge({
         businessId: ctx.business.id,
@@ -559,7 +704,10 @@ export default class SalonController {
 
   async deletePrinter(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    await Printer.query().where('business_id', ctx.business.id).andWhere('id', Number(ctx.params.id)).delete()
+    await Printer.query()
+      .where('business_id', ctx.business.id)
+      .andWhere('id', Number(ctx.params.id))
+      .delete()
     return { status: 'success' }
   }
 
@@ -568,13 +716,21 @@ export default class SalonController {
     return this.manejar(ctx, async () => {
       const id = Number(ctx.params.id) || null
       const a = id
-        ? await ProductionArea.query().where('business_id', ctx.business.id).andWhere('id', id).firstOrFail()
+        ? await ProductionArea.query()
+            .where('business_id', ctx.business.id)
+            .andWhere('id', id)
+            .firstOrFail()
         : new ProductionArea()
-      const name = String(ctx.request.input('name', a.name ?? '')).trim().slice(0, 60)
+      const name = String(ctx.request.input('name', a.name ?? ''))
+        .trim()
+        .slice(0, 60)
       if (!name) throw new OrderError('Escribe un nombre')
       const printerId = ctx.request.input('printerId', a.printerId ?? null)
       if (printerId) {
-        await Printer.query().where('business_id', ctx.business.id).andWhere('id', Number(printerId)).firstOrFail()
+        await Printer.query()
+          .where('business_id', ctx.business.id)
+          .andWhere('id', Number(printerId))
+          .firstOrFail()
       }
       a.merge({
         businessId: ctx.business.id,
@@ -590,7 +746,10 @@ export default class SalonController {
 
   async deleteArea(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    await ProductionArea.query().where('business_id', ctx.business.id).andWhere('id', Number(ctx.params.id)).delete()
+    await ProductionArea.query()
+      .where('business_id', ctx.business.id)
+      .andWhere('id', Number(ctx.params.id))
+      .delete()
     return { status: 'success' }
   }
 
@@ -599,7 +758,8 @@ export default class SalonController {
     if (!this.soloDueno(ctx)) return
     return this.manejar(ctx, async () => {
       const b = ctx.business.id
-      const validas = new Set((await ProductionArea.query().where('business_id', b).select('id')).map((a) => a.id))
+      const filasAreas = await ProductionArea.query().where('business_id', b).select('id')
+      const validas = new Set(filasAreas.map((a) => a.id))
       const limpiar = (v: unknown) => {
         const n = Number(v)
         if (!v || !n) return null
@@ -629,9 +789,14 @@ export default class SalonController {
     return this.manejar(ctx, async () => {
       const id = Number(ctx.params.id) || null
       const t = id
-        ? await DiningTable.query().where('business_id', ctx.business.id).andWhere('id', id).firstOrFail()
+        ? await DiningTable.query()
+            .where('business_id', ctx.business.id)
+            .andWhere('id', id)
+            .firstOrFail()
         : new DiningTable()
-      const name = String(ctx.request.input('name', t.name ?? '')).trim().slice(0, 40)
+      const name = String(ctx.request.input('name', t.name ?? ''))
+        .trim()
+        .slice(0, 40)
       if (!name) throw new OrderError('Escribe el nombre o número de la mesa')
       const zone = ctx.request.input('zone', t.zone ?? null)
       const seats = ctx.request.input('seats', t.seats ?? null)
@@ -654,9 +819,16 @@ export default class SalonController {
     return this.manejar(ctx, async () => {
       const cantidad = Math.floor(Number(ctx.request.input('count')))
       if (!cantidad || cantidad < 1 || cantidad > 100) throw new OrderError('Entre 1 y 100 mesas')
-      const prefijo = String(ctx.request.input('prefix', '') ?? '').trim().slice(0, 20)
-      const zone = String(ctx.request.input('zone', '') ?? '').trim().slice(0, 40) || null
-      const existentes = await DiningTable.query().where('business_id', ctx.business.id).count('* as n')
+      const prefijo = String(ctx.request.input('prefix', '') ?? '')
+        .trim()
+        .slice(0, 20)
+      const zone =
+        String(ctx.request.input('zone', '') ?? '')
+          .trim()
+          .slice(0, 40) || null
+      const existentes = await DiningTable.query()
+        .where('business_id', ctx.business.id)
+        .count('* as n')
       const base = Number(existentes[0].$extras.n)
       const creadas = []
       for (let i = 1; i <= cantidad; i++) {
@@ -681,7 +853,10 @@ export default class SalonController {
         .where('business_id', ctx.business.id)
         .andWhere('id', Number(ctx.params.id))
         .firstOrFail()
-      const abierta = await Order.query().where('dining_table_id', t.id).andWhere('status', 'abierta').first()
+      const abierta = await Order.query()
+        .where('dining_table_id', t.id)
+        .andWhere('status', 'abierta')
+        .first()
       if (abierta) throw new OrderError('La mesa tiene una cuenta abierta')
       await t.delete()
       return { ok: true }
@@ -693,7 +868,9 @@ export default class SalonController {
     return this.manejar(ctx, async () => {
       const id = Number(ctx.params.id) || null
       const datos = ctx.request.only(['name', 'pin', 'role', 'isActive'])
-      return id ? StaffService.actualizar(ctx.business, id, datos) : StaffService.crear(ctx.business, datos as any)
+      return id
+        ? StaffService.actualizar(ctx.business, id, datos)
+        : StaffService.crear(ctx.business, datos as any)
     })
   }
 
@@ -706,7 +883,11 @@ export default class SalonController {
   /** Quién autorizó qué (descuentos, cancelaciones, anulaciones…). */
   async authorizationLog(ctx: HttpContext) {
     if (!this.soloDueno(ctx)) return
-    const filas = await db.from('authorization_logs').where('business_id', ctx.business.id).orderBy('id', 'desc').limit(100)
+    const filas = await db
+      .from('authorization_logs')
+      .where('business_id', ctx.business.id)
+      .orderBy('id', 'desc')
+      .limit(100)
     return { status: 'success', data: filas }
   }
 }
@@ -726,7 +907,9 @@ export class PosDeviceController {
 
   /** Vincula este equipo al negocio con el código que ve el dueño. */
   async pair(ctx: HttpContext) {
-    return this.manejar(ctx, () => StaffService.vincular(ctx.request.input('code'), ctx.request.input('name')))
+    return this.manejar(ctx, () =>
+      StaffService.vincular(ctx.request.input('code'), ctx.request.input('name'))
+    )
   }
 
   async info(ctx: HttpContext) {
@@ -734,6 +917,44 @@ export class PosDeviceController {
       const info = await StaffService.infoEquipo(ctx.request.input('deviceToken'))
       if (!info) throw new OrderError('Este equipo no está vinculado')
       return info
+    })
+  }
+
+  /** Equipo en modo monitor: muestra los platos de sus áreas sin pedir PIN. */
+  private async equipoMonitor(ctx: HttpContext) {
+    const d = await StaffService.equipo(ctx.request.input('deviceToken'))
+    if (!d) throw new OrderError('Este equipo no está vinculado')
+    if (d.mode !== 'monitor') throw new OrderError('Este equipo no es un monitor de producción')
+    const business = await Business.findOrFail(d.business_id)
+    if (business.status !== 'activo') throw new OrderError('Negocio inactivo')
+    await db.from('pos_devices').where('id', d.id).update({ last_seen_at: new Date() })
+    return { d, business }
+  }
+
+  async monitor(ctx: HttpContext) {
+    return this.manejar(ctx, async () => {
+      const { d, business } = await this.equipoMonitor(ctx)
+      const areaIds = StaffService.areasDeEquipo(d)
+      const areas = areaIds.length
+        ? await db.from('production_areas').whereIn('id', areaIds).select('id', 'name')
+        : []
+      return {
+        equipo: d.name,
+        negocio: business.name,
+        areas: areas.map((a) => a.name),
+        tickets: await KitchenService.tickets(business, areaIds.length ? areaIds : null),
+      }
+    })
+  }
+
+  async monitorItems(ctx: HttpContext) {
+    return this.manejar(ctx, async () => {
+      const { business } = await this.equipoMonitor(ctx)
+      return KitchenService.cambiar(
+        business,
+        ctx.request.input('ids') ?? [],
+        ctx.request.input('estado')
+      )
     })
   }
 
