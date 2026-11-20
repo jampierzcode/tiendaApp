@@ -1489,6 +1489,7 @@ export default class SalonService {
       .withCount('items', (i) =>
         i.whereNull('voided_at').whereIn('kitchen_status', ['listo', 'servido']).as('terminados')
       )
+      .preload('items', (i) => i.whereNull('voided_at').orderBy('id'))
       .orderBy('id', 'asc')
     if (actor.permisos['cuentas.ver'] !== 'todas') q.andWhere('opened_by_user_id', actor.userId)
     const lista = await q
@@ -1515,6 +1516,8 @@ export default class SalonService {
                 : 'en_cocina',
         platos: total,
         listos,
+        /** Qué lleva, para reconocer el pedido de un vistazo: "2× Lomo saltado, 1× Chaufa". */
+        detalle: resumenPlatos(o.items),
         courier: o.courier,
         salioEn: o.shippedAt?.toISO() ?? null,
         desde: o.createdAt.toISO(),
@@ -1826,4 +1829,12 @@ export default class SalonService {
     for (const u of users) if (!mapa.has(u.id)) mapa.set(u.id, u.name)
     return mapa
   }
+}
+
+/** Agrupa los platos por nombre: "2× Lomo saltado, 1× Chaufa de pollo". */
+function resumenPlatos(items: { productName: string; quantity: number }[]) {
+  const porNombre = new Map<string, number>()
+  for (const it of items)
+    porNombre.set(it.productName, (porNombre.get(it.productName) ?? 0) + Number(it.quantity))
+  return [...porNombre].map(([n, c]) => `${c}× ${n}`).join(', ')
 }
