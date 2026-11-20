@@ -97,6 +97,10 @@ export default class Order extends BaseModel {
   declare closedAt: DateTime | null
 
   /** Estado de la cuenta del PDV mientras está abierta: abierta, impresa o reabierta. */
+  /** Número de cuenta del día en el PDV: M001, L001, D001. */
+  @column()
+  declare accountName: string | null
+
   @column()
   declare accountStatus: 'abierta' | 'impresa' | 'reabierta' | null
 

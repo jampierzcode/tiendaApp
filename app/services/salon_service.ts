@@ -36,6 +36,8 @@ export interface DatosComanda {
   customerName?: string | null
   customerPhone?: string | null
   deliveryAddress?: string | null
+  /** Delivery: costo del envío que se suma a la cuenta. */
+  shippingCost?: number | null
   /** Generado por el celular: si reintenta sin señal, la ronda no se duplica. */
   clientRequestId: string
   guests?: number | null
@@ -113,10 +115,14 @@ export default class SalonService {
     }
   }
 
+  /** Cómo se nombra la cuenta en pantalla y en los tickets: "Mesa 4 · M003", "L007 · Juan". */
   static etiqueta(order: Order) {
-    if (order.service === 'comedor' && order.diningTableId)
-      return `Mesa ${order.tableLabel ?? ''}`.trim()
-    return order.tableLabel || order.customerName
+    const num = order.accountName
+    if (order.service === 'comedor' && order.diningTableId) {
+      return [`Mesa ${order.tableLabel ?? ''}`.trim(), num].filter(Boolean).join(' · ')
+    }
+    const nombre = order.tableLabel && order.tableLabel !== num ? order.tableLabel : null
+    return [num, nombre].filter(Boolean).join(' · ') || order.customerName
   }
 
   // ---------------------------------------------------------------- lectura
@@ -330,6 +336,10 @@ export default class SalonService {
       service: order.service,
       etiqueta: this.etiqueta(order),
       mesa: { id: order.diningTableId, name: order.diningTableId ? order.tableLabel : null },
+      accountName: order.accountName,
+      shippingCost: Number(order.shippingCost ?? 0),
+      courier: order.courier,
+      shippedAt: order.shippedAt?.toISO() ?? null,
       customerName: order.customerName,
       customerPhone: order.customerPhone,
       deliveryAddress: order.deliveryAddress,
@@ -457,12 +467,27 @@ export default class SalonService {
         }
 
         if (!order) {
+          const numero = await this.siguienteNombre(business, servicio, trx)
           const alias =
             servicio === 'comedor'
               ? mesa!.name
               : datos.alias?.trim().slice(0, 60) ||
                 datos.customerName?.trim().slice(0, 60) ||
-                `Orden ${await this.siguienteNumeroDelDia(business, trx)}`
+                numero
+          // Delivery: el cliente queda guardado para la próxima vez (se busca por teléfono).
+          const cliente =
+            servicio === 'delivery'
+              ? await OrderService.registrarCliente(
+                  business,
+                  {
+                    customerName: datos.customerName!.trim(),
+                    customerPhone: datos.customerPhone!.trim(),
+                    deliveryAddress: datos.deliveryAddress?.trim() || null,
+                    items: [],
+                  },
+                  trx
+                )
+              : null
           order = await Order.create(
             {
               businessId: business.id,
@@ -473,7 +498,9 @@ export default class SalonService {
               accountStatus: 'abierta',
               customerName:
                 servicio === 'comedor' ? `Mesa ${mesa!.name}` : datos.customerName?.trim() || alias,
-              customerPhone: datos.customerPhone?.trim() || null,
+              customerPhone: cliente?.phone ?? (datos.customerPhone?.trim() || null),
+              customerId: cliente?.id ?? null,
+              accountName: numero,
               deliveryMethod:
                 servicio === 'delivery' ? 'envio' : servicio === 'comedor' ? 'mesa' : 'recojo',
               deliveryAddress: datos.deliveryAddress?.trim() || null,
@@ -484,7 +511,8 @@ export default class SalonService {
               currency: business.currency,
               subtotal: 0,
               discountTotal: 0,
-              shippingCost: 0,
+              shippingCost:
+                servicio === 'delivery' ? r2(Math.max(0, Number(datos.shippingCost ?? 0) || 0)) : 0,
               total: 0,
               paidTotal: 0,
             },
@@ -626,18 +654,28 @@ export default class SalonService {
     }
   }
 
-  /** "Orden N" para las cuentas sin nombre: correlativo del día. */
-  private static async siguienteNumeroDelDia(business: Business, trx: TransactionClientContract) {
+  /**
+   * Número de cuenta del día por servicio: M001 (comedor), L001 (para
+   * llevar), D001 (delivery). Un candado por negocio y servicio evita que dos
+   * cajas saquen el mismo número a la vez.
+   */
+  private static async siguienteNombre(
+    business: Business,
+    servicio: Servicio,
+    trx: TransactionClientContract
+  ) {
+    const prefijo = servicio === 'comedor' ? 'M' : servicio === 'delivery' ? 'D' : 'L'
+    await trx.rawQuery('SELECT pg_advisory_xact_lock(?, ?)', [business.id, prefijo.charCodeAt(0)])
     const inicio = DateTime.now().setZone('America/Lima').startOf('day').toUTC().toSQL()!
     const fila = await trx
       .from('orders')
       .where('business_id', business.id)
       .andWhere('channel', 'salon')
-      .whereNot('service', 'comedor')
+      .andWhere('service', servicio)
       .andWhere('created_at', '>=', inicio)
       .count('* as n')
       .first()
-    return Number(fila?.n ?? 0) + 1
+    return `${prefijo}${String(Number(fila?.n ?? 0) + 1).padStart(3, '0')}`
   }
 
   /** Área de cada plato: la suya, o la de su primera categoría que tenga una. */
@@ -684,10 +722,11 @@ export default class SalonService {
       .whereNull('voided_at')
       .sum('line_total as total')
       .first()
-    const total = r2(Number(fila?.total ?? 0))
-    order.total = total
-    order.subtotal = r2(Math.max(Number(order.subtotal), total))
-    order.discountTotal = r2(Number(order.subtotal) - total)
+    const platos = r2(Number(fila?.total ?? 0))
+    order.subtotal = r2(Math.max(Number(order.subtotal), platos))
+    order.discountTotal = r2(Number(order.subtotal) - platos)
+    // El envío del delivery va aparte y se suma al total.
+    order.total = r2(platos + Number(order.shippingCost ?? 0))
     order.useTransaction(trx)
     await order.save()
   }
@@ -1004,7 +1043,8 @@ export default class SalonService {
 
       const sesion = await this.sesionParaCobrar(business, actor, trx)
 
-      const rebaja = r2((Number(order.total) * pct) / 100)
+      // El descuento es sobre los platos, no sobre el envío.
+      const rebaja = r2(((Number(order.total) - Number(order.shippingCost ?? 0)) * pct) / 100)
       const total = r2(Number(order.total) - rebaja)
       const cobrado = r2((datos.payments ?? []).reduce((t, p) => t + Number(p.amount || 0), 0))
       if (cobrado < total - 0.009) {
@@ -1244,6 +1284,126 @@ export default class SalonService {
     return { ok: true }
   }
 
+  // ------------------------------------------------- para llevar y delivery
+
+  /**
+   * Pedidos para llevar o delivery del día que aún no se entregan: los
+   * abiertos y también los ya cobrados (en caja se cobra primero y se entrega
+   * cuando cocina termina). Con el avance de cocina de cada uno.
+   */
+  static async enCurso(business: Business, actor: Actor, servicio: 'para_llevar' | 'delivery') {
+    const inicio = DateTime.now().minus({ hours: 18 }).toSQL()!
+    const q = Order.query()
+      .where('business_id', business.id)
+      .andWhere('channel', 'salon')
+      .andWhere('service', servicio)
+      .andWhere('created_at', '>=', inicio)
+      .where((w) => {
+        w.where('status', 'abierta').orWhere((p) =>
+          p
+            .where('status', 'entregado')
+            .whereExists((e) =>
+              e
+                .from('order_items')
+                .whereColumn('order_items.order_id', 'orders.id')
+                .whereNull('order_items.voided_at')
+                .whereIn('order_items.kitchen_status', ['pendiente', 'preparando', 'listo'])
+            )
+        )
+      })
+      .withCount('items', (i) =>
+        i.whereNull('voided_at').whereNotNull('kitchen_status').as('enCocina')
+      )
+      .withCount('items', (i) =>
+        i.whereNull('voided_at').whereIn('kitchen_status', ['listo', 'servido']).as('terminados')
+      )
+      .orderBy('id', 'asc')
+    if (actor.permisos['cuentas.ver'] !== 'todas') q.andWhere('opened_by_user_id', actor.userId)
+    const lista = await q
+    return lista.map((o) => {
+      const total = Number(o.$extras.enCocina ?? 0)
+      const listos = Number(o.$extras.terminados ?? 0)
+      return {
+        id: o.id,
+        etiqueta: this.etiqueta(o),
+        accountName: o.accountName,
+        cliente: o.customerName,
+        telefono: o.customerPhone,
+        direccion: o.deliveryAddress,
+        total: Number(o.total),
+        pagado: o.status === 'entregado',
+        folio: FolioService.texto(o.folioSeries, o.folioNumber),
+        cocina:
+          total === 0
+            ? 'sin_cocina'
+            : listos >= total
+              ? 'listo'
+              : listos > 0
+                ? 'parcial'
+                : 'en_cocina',
+        platos: total,
+        listos,
+        courier: o.courier,
+        salioEn: o.shippedAt?.toISO() ?? null,
+        desde: o.createdAt.toISO(),
+      }
+    })
+  }
+
+  /** Delivery: salió con el repartidor. */
+  static async despachar(
+    business: Business,
+    actor: Actor,
+    orderId: number,
+    courier?: string | null
+  ) {
+    const order = await Order.query()
+      .where('business_id', business.id)
+      .andWhere('id', orderId)
+      .andWhere('channel', 'salon')
+      .first()
+    if (!order) throw new OrderError('Pedido no encontrado')
+    this.exigirVisible(actor, order)
+    order.shippedAt = DateTime.now()
+    if (courier?.trim()) order.courier = courier.trim().slice(0, 60)
+    await order.save()
+    return { ok: true }
+  }
+
+  /** Se entregó al cliente: todo lo de cocina queda como servido. */
+  static async entregar(business: Business, actor: Actor, orderId: number) {
+    const order = await Order.query()
+      .where('business_id', business.id)
+      .andWhere('id', orderId)
+      .first()
+    if (!order) throw new OrderError('Pedido no encontrado')
+    this.exigirVisible(actor, order)
+    await OrderItem.query()
+      .where('order_id', order.id)
+      .whereNull('voided_at')
+      .whereIn('kitchen_status', ['pendiente', 'preparando', 'listo'])
+      .update({ kitchen_status: 'servido', served_at: DateTime.now().toSQL() })
+    return { ok: true }
+  }
+
+  /** Clientes por teléfono o nombre, para el delivery por llamada. */
+  static async buscarClientes(business: Business, texto: string) {
+    const t = String(texto ?? '').trim()
+    if (t.length < 3) return []
+    const digitos = t.replace(/\D/g, '')
+    const filas = await db
+      .from('customers')
+      .where('business_id', business.id)
+      .where((w) => {
+        if (digitos.length >= 3) w.whereILike('phone', `%${digitos}%`)
+        w.orWhereILike('name', `%${t}%`)
+      })
+      .orderBy('updated_at', 'desc')
+      .limit(8)
+      .select('id', 'name', 'phone', 'address', 'city')
+    return filas
+  }
+
   // ------------------------------------------------------------------ mesas
 
   /** Pasa la cuenta a otra mesa libre (o le asigna una si estaba sin mesa). */
@@ -1375,6 +1535,7 @@ export default class SalonService {
       lineas: [...lineas.values()],
       subtotal: c.subtotal,
       descuento: c.discountTotal,
+      envio: c.shippingCost,
       motivoDescuento: c.discountReason,
       total: c.total,
       pagos: c.payments,

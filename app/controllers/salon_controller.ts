@@ -136,11 +136,33 @@ export default class SalonController {
       'customerName',
       'customerPhone',
       'deliveryAddress',
+      'shippingCost',
       'clientRequestId',
       'guests',
       'items',
     ])
     return this.manejar(ctx, (a) => SalonService.comandar(ctx.business, a, body as any))
+  }
+
+  async inProgress(ctx: HttpContext) {
+    const servicio = ctx.request.input('service') === 'delivery' ? 'delivery' : 'para_llevar'
+    return this.manejar(ctx, (a) => SalonService.enCurso(ctx.business, a, servicio))
+  }
+
+  async dispatch(ctx: HttpContext) {
+    return this.manejar(ctx, (a) =>
+      SalonService.despachar(ctx.business, a, Number(ctx.params.id), ctx.request.input('courier'))
+    )
+  }
+
+  async deliver(ctx: HttpContext) {
+    return this.manejar(ctx, (a) => SalonService.entregar(ctx.business, a, Number(ctx.params.id)))
+  }
+
+  async customers(ctx: HttpContext) {
+    return this.manejar(ctx, () =>
+      SalonService.buscarClientes(ctx.business, ctx.request.input('q'))
+    )
   }
 
   async printAccount(ctx: HttpContext) {

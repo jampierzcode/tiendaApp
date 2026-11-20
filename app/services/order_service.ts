@@ -534,7 +534,7 @@ export default class OrderService {
     return PricingService.redondear(Number(business.shippingCost ?? 0))
   }
 
-  private static async registrarCliente(business: Business, datos: DatosPedido, trx: any) {
+  static async registrarCliente(business: Business, datos: DatosPedido, trx: any) {
     // El teléfono llega con el código de país (51987654321). Se busca también
     // la versión sin código, por si el contacto se guardó antes como 987654321.
     const phone = datos.customerPhone.trim().replace(/[^\d+]/g, '').replace(/^\+/, '')
