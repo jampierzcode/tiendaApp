@@ -1,4 +1,5 @@
 import type Business from '#models/business'
+import { opcionesAgrupadas } from '#services/opciones_texto'
 import Order from '#models/order'
 import OrderItem from '#models/order_item'
 import OrderRound from '#models/order_round'
@@ -98,9 +99,7 @@ export default class KitchenService {
         id: i.id,
         cantidad: i.quantity,
         nombre: i.productName,
-        opciones: i.modifiers.map((m) =>
-          m.quantity > 1 ? `${m.quantity}x ${m.optionName}` : m.optionName
-        ),
+        opciones: opcionesAgrupadas(i.modifiers),
         nota: i.note,
         estado: i.kitchenStatus,
         anulado: Boolean(i.voidedAt),

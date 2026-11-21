@@ -1,4 +1,5 @@
 import type Business from '#models/business'
+import { opcionesAgrupadas } from '#services/opciones_texto'
 import Category from '#models/category'
 import CategoryProduct from '#models/category_product'
 import DiningTable from '#models/dining_table'
@@ -318,8 +319,23 @@ export default class SalonService {
 
     const promos = await PromotionService.activas(business.id)
 
+    // Solo las automáticas: los cupones dependen de que el cliente traiga el código.
+    const automaticas = promos.filter((p) => !p.code)
+
     return {
-      categorias: categorias.map((c) => ({ id: c.id, name: c.name })),
+      categorias: categorias.map((c) => ({
+        id: c.id,
+        name: c.name,
+        // La promoción que cubre la categoría entera (o toda la carta), para marcar el chip.
+        promos: automaticas
+          .filter(
+            (p) =>
+              p.scope === 'all' ||
+              (p.scope === 'category' && p.categoryId === c.id) ||
+              (p.scope === 'selection' && (p.targets ?? []).some((t) => t.kind === 'category' && t.targetId === c.id))
+          )
+          .map((p) => ({ name: p.name, label: PromotionService.etiqueta(p, business.currencySymbol ?? 'S/') })),
+      })),
       platos: products.map((p) => {
         const precio = PromotionService.precioPublico(
           promos,
@@ -332,6 +348,10 @@ export default class SalonService {
           name: p.name,
           imageUrl: p.businessImages?.url ?? null,
           price: precio.final,
+          originalPrice: precio.original,
+          discount: precio.descuento,
+          /** Todas las promos que tocan el plato (incluye 2x1, que no baja el precio unitario). */
+          promos: precio.etiquetas.map((e) => ({ name: e.name, label: e.label })),
           categoryIds: p.categoryLinks.map((l) => l.categoryId),
           modifierGroups: gruposPorProducto.get(p.id) ?? [],
         }
@@ -404,11 +424,29 @@ export default class SalonService {
         lineTotal: Number(i.lineTotal),
         note: i.note,
         area: i.productionAreaName,
-        modifiers: i.modifiers.map((m) => ({ name: m.optionName, quantity: m.quantity })),
+        modifiers: i.modifiers.map((m) => ({
+          name: m.optionName,
+          group: m.groupName,
+          quantity: m.quantity,
+          priceDelta: Number(m.priceDelta),
+        })),
         voided: Boolean(i.voidedAt),
         voidReason: i.voidReason,
         courtesy: i.isCourtesy,
         courtesyReason: i.isCourtesy ? i.promotionName : null,
+        // Promoción con que se vendió la línea (la cortesía se muestra aparte).
+        promo:
+          !i.isCourtesy && i.promotionName && Number(i.discountPercentage) > 0
+            ? {
+                name: i.promotionName,
+                percent: Number(i.discountPercentage),
+                // Cuánto se ahorró en soles: el % se mide sobre plato + extras y en
+                // una promo de monto fijo (S/ 5 menos) daría un 18.5% que confunde.
+                ahorro: r2(
+                  (Number(i.lineTotal) * Number(i.discountPercentage)) / (100 - Number(i.discountPercentage))
+                ),
+              }
+            : null,
         kitchenStatus: i.kitchenStatus,
       })),
       payments: order.payments.map((p) => ({
@@ -678,9 +716,7 @@ export default class SalonService {
           items: lista.map((i) => ({
             cantidad: i.quantity,
             nombre: i.productName,
-            opciones: (i.modifiers ?? []).map((m) =>
-              m.quantity > 1 ? `${m.quantity}x ${m.optionName}` : m.optionName
-            ),
+            opciones: opcionesAgrupadas(i.modifiers ?? []),
             nota: i.note,
           })),
         },
