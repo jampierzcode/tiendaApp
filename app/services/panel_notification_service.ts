@@ -2,6 +2,7 @@ import Notification from '#models/notification'
 import type Business from '#models/business'
 import type Order from '#models/order'
 import PushService from '#services/push_service'
+import PdvPushService from '#services/pdv_push_service'
 import logger from '@adonisjs/core/services/logger'
 
 export default class PanelNotificationService {
@@ -25,6 +26,7 @@ export default class PanelNotificationService {
         url: `/b/${business.uuid}/orders?pedido=${order.id}`,
         tag: `pedido-${order.id}`,
       })
+      await PdvPushService.pedidoWeb(business, order)
     } catch (error) {
       logger.error({ err: error }, 'No se pudo crear la notificación del pedido')
     }

@@ -1,5 +1,6 @@
 import type Business from '#models/business'
 import { opcionesAgrupadas } from '#services/opciones_texto'
+import PdvPushService from '#services/pdv_push_service'
 import Order from '#models/order'
 import OrderItem from '#models/order_item'
 import OrderRound from '#models/order_round'
@@ -132,6 +133,8 @@ export default class KitchenService {
     if (!ids.length) throw new OrderError('No hay platos')
 
     const ordenes = new Set<number>()
+    /** Platos que recién pasan a «listo», por cuenta: para avisar al mesero. */
+    const recienListos = new Map<number, string[]>()
     await db.transaction(async (trx) => {
       const items = await OrderItem.query({ client: trx })
         .where('business_id', business.id)
@@ -141,6 +144,10 @@ export default class KitchenService {
         .forUpdate()
       for (const i of items) {
         if (i.kitchenStatus === 'servido') continue
+        if (estado === 'listo' && i.kitchenStatus !== 'listo') {
+          const nombre = i.quantity > 1 ? `${i.quantity}× ${i.productName}` : i.productName
+          recienListos.set(i.orderId, [...(recienListos.get(i.orderId) ?? []), nombre])
+        }
         i.kitchenStatus = estado
         if (estado === 'preparando' && !i.startedAt) i.startedAt = DateTime.now()
         if (estado === 'listo') i.readyAt = DateTime.now()
@@ -153,6 +160,7 @@ export default class KitchenService {
     })
 
     for (const id of ordenes) await this.sincronizarPedidoOnline(business, id)
+    await PdvPushService.comandaLista(business, recienListos)
     return { ok: true }
   }
 
