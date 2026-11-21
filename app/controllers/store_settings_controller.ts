@@ -1,6 +1,5 @@
 import BusinessImage from '#models/business_image'
-import { esPais, PAISES, validarWhatsapp, type CodigoPais } from '#services/countries'
-import SlugService from '#services/slug_service'
+import { PAISES, validarWhatsapp, type CodigoPais } from '#services/countries'
 import db from '@adonisjs/lucid/services/db'
 import type { HttpContext } from '@adonisjs/core/http'
 
@@ -20,12 +19,10 @@ export default class StoreSettingsController {
 
   public async update({ request, business, response }: HttpContext) {
     const data = request.only([
-      'slug',
       'name',
       'description',
       'logo_url',
       'whatsapp_phone',
-      'country',
       'whatsapp_message_template',
       'phone',
       'email',
@@ -43,24 +40,12 @@ export default class StoreSettingsController {
       'shipping_cost',
       'free_shipping_from',
       'is_public',
-      'business_type',
       'payment_policy',
       'payment_instructions',
     ])
 
-    if (data.slug && data.slug !== business.slug) {
-      business.slug = await SlugService.uniqueSlugGlobal('businesses', data.slug, business.id)
-    }
-
-    // País: de él salen el impuesto y el formato del WhatsApp.
-    if (data.country !== undefined && !esPais(data.country)) {
-      return response.unprocessableEntity({
-        status: 'error',
-        message: `El país debe ser uno de: ${Object.values(PAISES).map((p) => p.nombre).join(', ')}`,
-      })
-    }
     const paisAntes = business.country as CodigoPais
-    const pais: CodigoPais = (data.country as CodigoPais | undefined) ?? paisAntes ?? 'PE'
+    const pais: CodigoPais = paisAntes ?? 'PE'
 
     if (data.whatsapp_phone !== undefined) {
       const digitos = String(data.whatsapp_phone ?? '').replace(/\D/g, '')
@@ -138,9 +123,6 @@ export default class StoreSettingsController {
         data.payment_instructions === undefined
           ? business.paymentInstructions
           : String(data.payment_instructions ?? '').trim().slice(0, 500) || null,
-      businessType: ['retail', 'restaurant'].includes(data.business_type)
-        ? data.business_type
-        : business.businessType,
     })
 
     await db.transaction(async (trx) => {
