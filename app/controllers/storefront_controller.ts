@@ -14,6 +14,7 @@ import ProductAttribute from '#models/product_attribute'
 import OrderService, { OrderError } from '#services/order_service'
 import VariationService from '#services/variation_service'
 import PromotionService from '#services/promotion_service'
+import MenuHoyService from '#services/menu_hoy_service'
 import type Discount from '#models/discount'
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
@@ -79,6 +80,8 @@ export default class StorefrontController {
         aceptaPedidos: business.puedeVender,
         // Plan Carta: sin pedidos en línea; el carrito arma el mensaje y abre WhatsApp.
         pedidosEnLinea: business.tieneFuncion('pedidos_online'),
+        // Sin pedidos en línea, el dueño decide: solo ver, consultar por plato o pedir por WhatsApp.
+        cartaWhatsapp: business.cartaWhatsapp ?? 'pedir',
         cuentasCliente: business.tieneFuncion('cuentas_cliente'),
         phone: business.phone,
         whatsappPhone: business.whatsappPhone,
@@ -103,10 +106,13 @@ export default class StorefrontController {
       return response.notFound({ status: 'error', message: 'Tienda no encontrada' })
     }
 
+    // Lo de hoy: fuera lo que no entró al Menú del día; lo agotado se ve en gris.
+    const disp = await MenuHoyService.disponibilidad(business.id)
     const products = await Product.query()
       .where('business_id', business.id)
       .andWhere('status', 'activo')
       .where(visiblePorCategoria)
+      .whereNotIn('products.id', [...disp.ocultos])
       .preload('businessImages')
       .preload('tags')
       .preload('defaultVariation')
@@ -173,6 +179,7 @@ export default class StorefrontController {
           .map((l) => l.subcategoryId)
           .filter((id): id is number => id !== null),
         tags: p.tags.map((t) => ({ name: t.name, color: t.color })),
+        agotado: disp.agotados.has(p.id),
         modifierGroups: gruposPorProducto.get(p.id) ?? [],
       }
     })

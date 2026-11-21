@@ -33,6 +33,10 @@ export default class Category extends BaseModel {
   @column()
   declare isActive: boolean
 
+  /** «Cambia cada día» (Menú del día): solo se ven los platos elegidos hoy, si se eligió alguno. */
+  @column()
+  declare dailyMenu: boolean
+
   @belongsTo(() => Business)
   declare business: BelongsTo<typeof Business>
 

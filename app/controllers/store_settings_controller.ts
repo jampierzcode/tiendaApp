@@ -42,6 +42,7 @@ export default class StoreSettingsController {
       'is_public',
       'payment_policy',
       'payment_instructions',
+      'carta_whatsapp',
     ])
 
     const paisAntes = business.country as CodigoPais
@@ -116,6 +117,9 @@ export default class StoreSettingsController {
             ? null
             : Number(data.free_shipping_from),
       isPublic: data.is_public === undefined ? business.isPublic : quierePublicar,
+      cartaWhatsapp: ['ninguno', 'consultar', 'pedir'].includes(data.carta_whatsapp)
+        ? data.carta_whatsapp
+        : business.cartaWhatsapp,
       paymentPolicy: ['none', 'on_confirm', 'on_delivery'].includes(data.payment_policy)
         ? data.payment_policy
         : business.paymentPolicy,
