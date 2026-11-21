@@ -395,6 +395,7 @@ router
     router.post('/salon/tables/:id/release', [SalonController, 'releaseTable'])
     router.get('/salon/accounts', [SalonController, 'accounts'])
     router.get('/salon/in-progress', [SalonController, 'inProgress'])
+    router.get('/salon/web-orders/latest', [SalonController, 'lastWebOrder'])
     router.get('/salon/customers', [SalonController, 'customers'])
     router.post('/salon/accounts/:id/dispatch', [SalonController, 'dispatch'])
     router.post('/salon/accounts/:id/deliver', [SalonController, 'deliver'])

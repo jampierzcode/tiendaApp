@@ -1,6 +1,7 @@
 import CashRegister from '#models/cash_register'
 import Category from '#models/category'
 import DiningTable from '#models/dining_table'
+import Notification from '#models/notification'
 import Order from '#models/order'
 import Printer from '#models/printer'
 import PrintJob from '#models/print_job'
@@ -142,6 +143,22 @@ export default class SalonController {
       'items',
     ])
     return this.manejar(ctx, (a) => SalonService.comandar(ctx.business, a, body as any))
+  }
+
+  /**
+   * Último pedido que entró por la tienda online o WhatsApp (de las últimas
+   * 12 h). El PDV lo consulta para anunciarlo en caja con sonido y voz.
+   */
+  async lastWebOrder(ctx: HttpContext) {
+    return this.manejar(ctx, async () => {
+      const n = await Notification.query()
+        .where('business_id', ctx.business.id)
+        .andWhere('type', 'pedido')
+        .andWhere('created_at', '>=', DateTime.now().minus({ hours: 12 }).toSQL()!)
+        .orderBy('id', 'desc')
+        .first()
+      return n ? { id: n.id, orderId: n.orderId, title: n.title, body: n.body } : null
+    })
   }
 
   async inProgress(ctx: HttpContext) {
