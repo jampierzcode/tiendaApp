@@ -221,6 +221,12 @@ export default class SalesAgentService {
     return { reply, media: [...ctx.media, ...extras.media] }
   }
 
+  /** Enlace público de la ficha de un producto en la tienda online. */
+  static enlaceProducto(business: Business, p: Product) {
+    const base = (env.get('STORE_PUBLIC_URL') ?? '').replace(/\/$/, '')
+    return `${base}/t/${business.slug}/p/${encodeURIComponent(p.slug)}`
+  }
+
   /** Precio «desde» de un producto (el más bajo de sus variaciones). */
   static precioDesde(p: Product) {
     const propias = (p.variations ?? []).filter((v) => !v.isDefault)
@@ -532,6 +538,8 @@ ${
 }
 - Antes de crear el pedido usa "cotizar_pedido" y muéstrale un resumen corto con el total real (incluye envío y descuentos). Créalo con "crear_pedido" SOLO cuando el cliente confirme ("sí", "dale", "confirmo"…).
 - Tras crear el pedido, dale el código, el total y el enlace de seguimiento; si el pago es por adelantado, explica cómo pagar con los métodos de pago de arriba (lista los activos con su número y titular) y pídele que mande la foto del comprobante. Los QR marcados «al confirmar» se envían solos con tu respuesta; si pide el QR de otro método, usa "enviar_qr_pago".
+- ENLACES DE PRODUCTO: si el cliente pide el link, la página o "dónde lo veo" de un producto, pásale el "enlace" de ese producto (viene en "buscar_productos" y "ver_producto"). El enlace del catálogo es solo para ver la tienda completa: no lo uses cuando pregunta por un producto concreto. Nunca armes enlaces a mano.
+- RESPUESTAS A UN MENSAJE: si el texto del cliente empieza con "[El cliente responde a tu foto: «…»]" (o a un mensaje o a una foto), se refiere a ESE producto o mensaje. "Este", "ese", "lo quiero", "¿precio?", "¿hay en M?" hablan de él: búscalo por su nombre con "buscar_productos"/"ver_producto" y sigue con él, sin preguntarle cuál es. Si le enviaste varias fotos y responde sin citar ninguna, pregúntale cuál le gustó.
 - Si pregunta por un pedido que ya hizo, usa "mis_pedidos".
 - Si el cliente manda una foto, MÍRALA y actúa según lo que sea:
   · Captura o foto de un producto (de esta tienda u otra): identifica qué es (nombre, tipo, color) y búscalo con "buscar_productos" para darle precio y disponibilidad reales.
@@ -711,6 +719,7 @@ FORMATO (WhatsApp, no Markdown)
               }
             : {}),
           tieneFoto: Boolean(p.businessImageId),
+          enlace: this.enlaceProducto(business, p),
         }
       }),
       nota: productos.length
@@ -743,6 +752,7 @@ FORMATO (WhatsApp, no Markdown)
       precioAntes: precio.descuento > 0 ? precio.original : null,
       promociones: precio.etiquetas,
       tieneFoto: Boolean(p.businessImageId),
+      enlace: this.enlaceProducto(business, p),
       // Respuestas que el dueño dejó para este producto: úsalas tal cual.
       preguntasFrecuentes: p.aiFaqs?.length
         ? p.aiFaqs.map((f, i) => ({
@@ -823,7 +833,7 @@ FORMATO (WhatsApp, no Markdown)
       if (!foto) return { enviada: false, nota: 'Esa pregunta no tiene foto.' }
       if (ctx.media.length >= 4) return { enviada: false, nota: 'Ya enviaste varias fotos en este mensaje.' }
       ctx.media.push({ url: foto.url, caption: p.name })
-      return { enviadas: 1, nota: 'La foto se enviará junto con tu respuesta; no pegues enlaces.' }
+      return { enviadas: 1, nota: 'La foto se enviará junto con tu respuesta; no pegues la URL de la foto.' }
     }
 
     const variacion = variacionId ? p.variations.find((v) => v.id === variacionId) : null
@@ -846,7 +856,7 @@ FORMATO (WhatsApp, no Markdown)
     return {
       enviadas: elegidas.length,
       fotosDisponibles: urls.length,
-      nota: 'Las fotos se enviarán junto con tu respuesta; no pegues enlaces.',
+      nota: 'Las fotos se enviarán junto con tu respuesta; no pegues la URL de las fotos.',
     }
   }
 
