@@ -17,6 +17,8 @@ import PosSettingsService, {
   type RolPos,
 } from '#services/pos_settings_service'
 import SalonService from '#services/salon_service'
+import MenuHoyService from '#services/menu_hoy_service'
+import { cambios } from '#controllers/menu_hoy_controller'
 import KitchenService, { type EstadoCocina } from '#services/kitchen_service'
 import Business from '#models/business'
 import StaffService from '#services/staff_service'
@@ -122,6 +124,26 @@ export default class SalonController {
 
   async menu(ctx: HttpContext) {
     return this.manejar(ctx, () => SalonService.menu(ctx.business))
+  }
+
+  /** Menú de hoy desde el PDV: cajera, gerente o quien tenga `carta.hoy` (o su autorización). */
+  async menuHoy(ctx: HttpContext) {
+    return this.manejar(ctx, () => MenuHoyService.pantalla(ctx.business.id))
+  }
+
+  async menuHoyProduct(ctx: HttpContext) {
+    return this.manejar(ctx, async (a) => {
+      await PermissionService.exigir(ctx.business, a, 'carta.hoy', { pin: this.pin(ctx) })
+      return MenuHoyService.marcarPlato(ctx.business.id, Number(ctx.params.id), cambios(ctx.request))
+    })
+  }
+
+  async menuHoyRepeat(ctx: HttpContext) {
+    return this.manejar(ctx, async (a) => {
+      await PermissionService.exigir(ctx.business, a, 'carta.hoy', { pin: this.pin(ctx) })
+      const r = await MenuHoyService.repetirUltimo(ctx.business.id)
+      return { ...r, ...(await MenuHoyService.pantalla(ctx.business.id)) }
+    })
   }
 
   async account(ctx: HttpContext) {

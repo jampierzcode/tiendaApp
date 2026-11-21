@@ -14,6 +14,7 @@ import OrderService, { OrderError } from '#services/order_service'
 import PanelNotificationService from '#services/panel_notification_service'
 import PricingService from '#services/pricing_service'
 import PromotionService from '#services/promotion_service'
+import MenuHoyService from '#services/menu_hoy_service'
 import PushService from '#services/push_service'
 import VariationService from '#services/variation_service'
 import Shipment from '#models/shipment'
@@ -636,10 +637,13 @@ FORMATO (WhatsApp, no Markdown)
       )
       .filter((p) => p.length >= 2)
 
+    // Lo que hoy no hay (fuera del Menú del día o agotado) no se ofrece.
+    const disp = await MenuHoyService.disponibilidad(business.id)
     const consultar = (modo: 'todas' | 'alguna') => {
       const q = Product.query()
         .where('business_id', business.id)
         .andWhere('status', 'activo')
+        .whereNotIn('products.id', [...disp.ocultos, ...disp.agotados])
         .where((v) =>
           v
             .whereDoesntHave('categoryLinks', (l) => l)
@@ -739,6 +743,10 @@ FORMATO (WhatsApp, no Markdown)
       )
       .first()
     if (!p) return { error: 'Ese producto no existe o ya no está disponible.' }
+    const disp = await MenuHoyService.disponibilidad(business.id)
+    if (disp.agotados.has(p.id) || disp.ocultos.has(p.id)) {
+      return { error: `Hoy no hay ${p.name}. Ofrece otra opción de la carta.` }
+    }
 
     const promos = await PromotionService.activas(business.id)
     const categoryIds = p.categoryLinks.map((l) => l.categoryId)

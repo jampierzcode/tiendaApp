@@ -95,6 +95,14 @@ export default class Product extends BaseModel {
   @column()
   declare status: 'activo' | 'inactivo'
 
+  /** Día (AAAA-MM-DD, Lima) para el que se eligió en una categoría «cambia cada día». */
+  @column()
+  declare menuDate: string | null
+
+  /** Día (AAAA-MM-DD, Lima) en que se acabó: ese día no se vende y vuelve solo al siguiente. */
+  @column()
+  declare soldOutDate: string | null
+
   @belongsTo(() => Business)
   declare business: BelongsTo<typeof Business>
 

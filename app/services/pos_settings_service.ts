@@ -72,6 +72,11 @@ export const PERMISOS = {
     },
   },
   'caja.corte_global': { grupo: 'Caja', label: 'Hacer el corte global del turno', tipo: 'si_no' },
+  'carta.hoy': {
+    grupo: 'Carta',
+    label: 'Elegir el menú de hoy y marcar lo que se acabó',
+    tipo: 'si_no',
+  },
   'autorizar.otros': {
     grupo: 'Supervisión',
     label: 'Autorizar con su PIN lo que otros no pueden',
@@ -102,6 +107,7 @@ const MESERO: MapaPermisos = {
   'caja.cerrar_otras': false,
   'caja.ver_esperado': 'nada',
   'caja.corte_global': false,
+  'carta.hoy': false,
   'autorizar.otros': false,
 }
 
@@ -116,6 +122,7 @@ export const PERMISOS_POR_DEFECTO: Record<RolPos, MapaPermisos> = {
     'caja.operar': true,
     'caja.cerrar_otras': true,
     'caja.ver_esperado': 'ciego',
+    'carta.hoy': true,
   },
   gerente: {
     'cuentas.ver': 'todas',
@@ -136,6 +143,7 @@ export const PERMISOS_POR_DEFECTO: Record<RolPos, MapaPermisos> = {
     'caja.cerrar_otras': true,
     'caja.ver_esperado': 'todo',
     'caja.corte_global': true,
+    'carta.hoy': true,
     'autorizar.otros': true,
   },
 }

@@ -10,6 +10,7 @@ import Product from '#models/product'
 import ProductVariation from '#models/product_variation'
 import PricingService from '#services/pricing_service'
 import PromotionService from '#services/promotion_service'
+import MenuHoyService from '#services/menu_hoy_service'
 import { PAISES, revisarTelefonoCliente, type CodigoPais } from '#services/countries'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -411,6 +412,11 @@ export default class OrderService {
 
     if (products.length !== productIds.length) {
       throw new OrderError('Alguno de los platos ya no está disponible')
+    }
+    const disp = await MenuHoyService.disponibilidad(business.id)
+    const noHay = products.filter((p) => disp.agotados.has(p.id) || disp.ocultos.has(p.id))
+    if (noHay.length) {
+      throw new OrderError(`Hoy no hay: ${noHay.map((p) => p.name).join(', ')}`)
     }
     const productoPorId = new Map(products.map((p) => [p.id, p]))
 

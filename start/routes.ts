@@ -32,6 +32,7 @@ import ProductAttributeValuesController from '#controllers/product_attribute_val
 import ProductVariationsController from '#controllers/product_variations_controller'
 import ProductVariationAttributesController from '#controllers/product_variation_attributes_controller'
 import CategoriesController from '#controllers/categories_controller'
+import MenuHoyController from '#controllers/menu_hoy_controller'
 import SubcategoriesController from '#controllers/subcategories_controller'
 import BusinessImagesController from '#controllers/business_images_controller'
 import InventoryController from '#controllers/inventory_controller'
@@ -264,6 +265,12 @@ router
     router.put('/business-images/:id', [BusinessImagesController, 'update'])
     router.delete('/business-images/:id', [BusinessImagesController, 'destroy'])
 
+    // Menú de hoy: platos elegidos del día y lo que se acabó (cualquier plan)
+    router.get('/menu-hoy', [MenuHoyController, 'show'])
+    router.put('/menu-hoy/categories/:id', [MenuHoyController, 'category'])
+    router.put('/menu-hoy/products/:id', [MenuHoyController, 'product'])
+    router.post('/menu-hoy/repeat', [MenuHoyController, 'repeat'])
+
     // Categorías
     router.get('/categories', [CategoriesController, 'index'])
     router.put('/categories/reorder', [CategoriesController, 'reorder'])
@@ -391,6 +398,9 @@ router
 
     // PDV de salón: operación (dueño y personal, según permisos)
     router.get('/salon/me', [SalonController, 'me'])
+    router.get('/salon/menu-hoy', [SalonController, 'menuHoy'])
+    router.put('/salon/menu-hoy/products/:id', [SalonController, 'menuHoyProduct'])
+    router.post('/salon/menu-hoy/repeat', [SalonController, 'menuHoyRepeat'])
     router.get('/salon/tables', [SalonController, 'tables'])
     router.post('/salon/tables/:id/release', [SalonController, 'releaseTable'])
     router.get('/salon/accounts', [SalonController, 'accounts'])

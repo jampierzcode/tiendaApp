@@ -119,6 +119,10 @@ export default class Business extends BaseModel {
   @column()
   declare paymentPolicy: 'none' | 'on_confirm' | 'on_delivery'
 
+  /** WhatsApp en la carta pública cuando no hay pedidos en línea: solo ver, consultar por plato o pedir. */
+  @column()
+  declare cartaWhatsapp: 'ninguno' | 'consultar' | 'pedir'
+
   /** Texto libre para el cliente: a qué Yape o cuenta pagar. */
   @column()
   declare paymentInstructions: string | null

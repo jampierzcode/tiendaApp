@@ -4,6 +4,7 @@ import Product from '#models/product'
 import { OrderError } from '#services/order_service'
 import PosService from '#services/pos_service'
 import PromotionService from '#services/promotion_service'
+import MenuHoyService from '#services/menu_hoy_service'
 import VariationService from '#services/variation_service'
 import { InsufficientStockError } from '#services/inventory_service'
 import type { HttpContext } from '@adonisjs/core/http'
@@ -27,9 +28,11 @@ export default class PosController {
     const pagina = Math.max(1, Number(request.input('page', 1)) || 1)
     const porPagina = Math.min(60, Math.max(6, Number(request.input('perPage', 24)) || 24))
 
+    const disp = await MenuHoyService.disponibilidad(business.id)
     const q = Product.query()
       .where('business_id', business.id)
       .andWhere('status', 'activo')
+      .whereNotIn('products.id', [...disp.ocultos, ...disp.agotados])
       .preload('businessImages')
       .preload('categoryLinks')
       .preload('variations', (v) => {

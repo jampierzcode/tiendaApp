@@ -20,6 +20,7 @@ import type { CobroMostrador } from '#services/pos_service'
 import PosSettingsService, { type AjustesPos } from '#services/pos_settings_service'
 import PricingService from '#services/pricing_service'
 import PromotionService from '#services/promotion_service'
+import MenuHoyService from '#services/menu_hoy_service'
 import db from '@adonisjs/lucid/services/db'
 import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 import { DateTime } from 'luxon'
@@ -276,9 +277,11 @@ export default class SalonService {
 
   /** Carta para comandar: platos activos con sus modificadores. */
   static async menu(business: Business) {
+    const disp = await MenuHoyService.disponibilidad(business.id)
     const products = await Product.query()
       .where('business_id', business.id)
       .andWhere('status', 'activo')
+      .whereNotIn('products.id', [...disp.ocultos])
       .preload('businessImages')
       .preload('categoryLinks')
       .orderBy('sort_order', 'asc')
@@ -353,6 +356,8 @@ export default class SalonService {
           /** Todas las promos que tocan el plato (incluye 2x1, que no baja el precio unitario). */
           promos: precio.etiquetas.map((e) => ({ name: e.name, label: e.label })),
           categoryIds: p.categoryLinks.map((l) => l.categoryId),
+          /** Se acabó hoy: se ve en gris y no se comanda. */
+          agotado: disp.agotados.has(p.id),
           modifierGroups: gruposPorProducto.get(p.id) ?? [],
         }
       }),
