@@ -1536,6 +1536,8 @@ export default class SalonService {
         id: o.id,
         etiqueta: this.etiqueta(o),
         accountName: o.accountName,
+        /** La abrió quien consulta: al mesero solo le avisa «comanda lista» de lo suyo. */
+        propia: o.openedByUserId === actor.userId,
         cliente: this.cliente(o),
         telefono: o.customerPhone,
         direccion: o.deliveryAddress,
