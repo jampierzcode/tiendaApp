@@ -617,6 +617,12 @@ export default class ProductsController {
 
     // El slug solo se regenera si cambió el nombre, para no romper enlaces
     // que ya estén circulando por WhatsApp.
+    // El área se guarda directo en la BD: se aplica y se recarga ANTES de mezclar
+    // los cambios. Si se recargaba después, refresh() borraba lo editado (nombre,
+    // precio, «Visible en la carta»…) y el guardado no hacía nada.
+    await ProductsController.aplicarArea(business.id, product.id, request.input('production_area_id'))
+    if (request.input('production_area_id') !== undefined) await product.refresh()
+
     if (data.name && data.name !== product.name) {
       product.slug = await SlugService.uniqueFor('products', business.id, data.name, product.id)
     }
@@ -641,9 +647,6 @@ export default class ProductsController {
           ? product.aiFaqs
           : await ProductsController.limpiarFaqs(business.id, request.input('ai_faqs')),
     })
-
-    await ProductsController.aplicarArea(business.id, product.id, request.input('production_area_id'))
-    if (request.input('production_area_id') !== undefined) await product.refresh()
 
     try {
       await db.transaction(async (trx) => {
