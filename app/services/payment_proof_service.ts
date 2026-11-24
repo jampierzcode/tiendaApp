@@ -72,10 +72,7 @@ export default class PaymentProofService {
       ? await base().andWhere('code', codigoPedido.trim().toUpperCase()).first()
       : null
     if (!order) {
-      order = await base()
-        .whereRaw('total - paid_total > 0.01')
-        .orderBy('id', 'desc')
-        .first()
+      order = await base().whereRaw('total - paid_total > 0.01').orderBy('id', 'desc').first()
     }
 
     const operacion = lectura.numeroOperacion?.replace(/\s/g, '').slice(0, 60) || null
@@ -119,9 +116,58 @@ export default class PaymentProofService {
     return { repetido: false as const, proof, order, esperado }
   }
 
+  /** Comprobantes que este número mandó en los últimos días (los que no se rechazaron). */
+  static async recientes(businessId: number, telefonos: string[], dias = 3) {
+    const finales = [
+      ...new Set(telefonos.map((t) => t.replace(/\D/g, '').slice(-9)).filter(Boolean)),
+    ]
+    if (!finales.length) return []
+    return PaymentProof.query()
+      .where('business_id', businessId)
+      .andWhereNot('status', 'rechazado')
+      .andWhere('created_at', '>', DateTime.now().minus({ days: dias }).toSQL()!)
+      .andWhere((q) => {
+        for (const f of finales) q.orWhere('phone', 'like', `%${f}`)
+      })
+      .preload('order')
+      .orderBy('id', 'asc')
+  }
+
+  /**
+   * El comprador pagó el adelanto ANTES de que existiera el pedido (el chat
+   * se lo pidió): al crearse el pedido, esos comprobantes sueltos son suyos.
+   */
+  static async vincularSueltos(business: Business, telefonos: string[], order: Order) {
+    const recientes = await this.recientes(business.id, telefonos, 2)
+    const sueltos = recientes.filter((p) => p.orderId === null && p.status === 'por_validar')
+    if (!sueltos.length) return []
+    const simbolo = business.currencySymbol || 'S/'
+    for (const p of sueltos) {
+      p.orderId = order.id
+      await p.save()
+    }
+    try {
+      const total = sueltos.reduce((t, p) => t + Number(p.amount ?? 0), 0)
+      await Notification.create({
+        businessId: business.id,
+        type: 'pedido',
+        orderId: order.id,
+        title: `Comprobante por validar · ${order.code}`,
+        body: `${order.customerName ?? ''} · ${simbolo} ${total.toFixed(2)} enviado antes del pedido`
+          .replace(/^ · /, '')
+          .slice(0, 250),
+      })
+    } catch (error) {
+      logger.error({ err: error }, 'No se pudo avisar el comprobante asociado')
+    }
+    return sueltos
+  }
+
   private static async avisarDueno(business: Business, proof: PaymentProof, order: Order | null) {
     const simbolo = business.currencySymbol || 'S/'
-    const titulo = order ? `Comprobante por validar · ${order.code}` : 'Comprobante sin pedido por validar'
+    const titulo = order
+      ? `Comprobante por validar · ${order.code}`
+      : 'Comprobante sin pedido por validar'
     const cuerpo = [
       order?.customerName ?? proof.phone,
       proof.amount !== null && `${simbolo} ${proof.amount.toFixed(2)}`,
